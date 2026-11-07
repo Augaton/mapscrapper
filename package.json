@@ -1,0 +1,33 @@
+{
+  "name": "mapscraper",
+  "version": "2.6.0",
+  "description": "Extracts every asset a Source Engine / Garry's Mod map depends on (materials, textures, models, sounds, soundscapes, particles, misc files) from its VMF.",
+  "main": "main.js",
+  "author": "SpySpaille",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node main.js",
+    "test": "node test/run.js && node test/features.js && node test/ux.js",
+    "vector": "node test/make-vector.js",
+    "build": "pkg . --targets node22-win-x64 --output dist/MapScraper.exe && node scripts/checksum.js"
+  },
+  "dependencies": {
+    "@colors/colors": "^1.6.0",
+    "figlet": "^1.8.0"
+  },
+  "bin": "./main.js",
+  "pkg": {
+    "scripts": [
+      "src/**/*.js"
+    ],
+    "assets": [
+      "node_modules/figlet/fonts/Standard.flf"
+    ]
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "6.22.0"
+  }
+}
