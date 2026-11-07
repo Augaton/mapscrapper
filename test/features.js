@@ -14,10 +14,18 @@ const { optimizeTextures } = require('../src/optimize');
 const { Scraper } = require('../src/scraper');
 const vtf = require('../src/vtf');
 const { crc32 } = require('../src/crc32');
+const { makeT } = require('../src/i18n');
 const F = require('./fixtures');
 const vector = require('./lzma-vector');
 
 let passed = 0;
+/** Counts event-loop turns until the returned stop() is called: a step that blocks the loop leaves it near 0. */
+function loopTurns() {
+  let turns = 0, on = true;
+  const spin = () => { turns++; if (on) setImmediate(spin); };
+  setImmediate(spin);
+  return () => { on = false; return turns; };
+}
 async function test(name, fn) {
   try { await fn(); passed++; console.log(`  ok  ${name}`); } catch (e) { console.error(`  FAIL ${name}\n${e.stack}`); process.exitCode = 1; }
 }
@@ -179,6 +187,23 @@ const vmt = (tex, extra = '') => `"VertexLitGeneric"\n{\n\t"$basetexture" "${tex
     assert.deepStrictEqual(r.packed, ['scripts/soundscapes_other.txt']);
   });
 
+  await test('the BSP step lets the console redraw (status shown while packing)', async () => {
+    const t = makeT('en');
+    let current = '', seen = null;
+    await scrape('out_bsp_ui', { onStatus: (m) => { current = m; if (m === t('phase.pack')) setImmediate(() => { seen = current; }); } });
+    assert.strictEqual(seen, t('phase.pack'));
+  });
+
+  await test('Valve tools (bspzip, compression) run without blocking the event loop', async () => {
+    const s = new Scraper({ gamepath: game, bsp: bspFile, outputDir: path.join(root, 'out_tool'), cacheDir });
+    const stop = loopTurns();
+    const r = await s.runTool(process.execPath, ['-e', 'setTimeout(() => { console.error("boom"); process.exit(3); }, 150)']);
+    const turns = stop();
+    assert.deepStrictEqual([r.ok, r.status, r.output], [false, 3, 'boom']);
+    assert.ok(turns > 10, `turns=${turns}`);
+    assert.strictEqual((await s.runTool(path.join(root, 'no-such-tool.exe'), [])).ok, false, 'a missing tool fails cleanly');
+  });
+
   await test('--all-skins copies every skin', async () => {
     const { r, has } = await scrape('out_allskins', { allSkins: true });
     assert.ok(has('materials/models/props/skin_a.vmt'));
@@ -234,6 +259,32 @@ const vmt = (tex, extra = '') => `"VertexLitGeneric"\n{\n\t"$basetexture" "${tex
     assert.ok(!fs.existsSync(path.join(outDir, 'models/props/dyn.vvd')) && !fs.existsSync(path.join(outDir, 'materials/models/props')) === false);
   });
 
+  await test('an interrupted copy never leaves a truncated file that a later --incremental run would keep', async () => {
+    const outDir = path.join(root, 'out_cut');
+    fs.writeFileSync(vmfFile, ent('prop_static', { model: 'models/props/multi.mdl', skin: '0' }) + ent('prop_dynamic', { model: 'models/props/dyn.mdl' }));
+    const make = (incremental) => new Scraper({ gamepath: game, vmf: vmfFile, outputDir: outDir, cacheDir, incremental, copyThreads: 2 });
+    await make(false).run(); // a complete extraction: its state file stays behind
+    const real = fs.promises.copyFile;
+    let calls = 0;
+    fs.promises.copyFile = async (src, dest) => { // the 3rd copy dies half-way (Ctrl+C, full disk...)
+      if (++calls === 3) { fs.writeFileSync(dest, 'TRUNC'); const e = new Error('disk full'); e.code = 'ENOSPC'; throw e; }
+      return real(src, dest);
+    };
+    try { await assert.rejects(() => make(false).run(), /disk full/); } finally { fs.promises.copyFile = real; }
+    put(outDir, 'materials/leftover.vmt.mstmp', 'left by a killed run');
+    const r = await make(true).run();
+    const bad = [];
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name), rel = path.relative(outDir, p), src = path.join(game, rel);
+        if (e.isDirectory()) walk(p);
+        else if (p.endsWith('.mstmp') || (fs.existsSync(src) && !fs.readFileSync(src).equals(fs.readFileSync(p)))) bad.push(rel);
+      }
+    })(outDir);
+    assert.deepStrictEqual(bad, [], 'every output file is complete');
+    assert.ok(r.stats.written >= 1, 'what the failed run did not copy is copied now');
+  });
+
   await test('refuses to wipe a folder that holds foreign files', async () => {
     const outDir = path.join(root, 'documents');
     put(outDir, 'thesis.docx', 'precious');
@@ -247,13 +298,16 @@ const vmt = (tex, extra = '') => `"VertexLitGeneric"\n{\n\t"$basetexture" "${tex
     for (const no of ['scripts/soundscapes_x.txt', 'maps/x_particles.txt', 'maps/x_level_sounds.txt', 'detail.vbsp', 'materials/correction/x.raw', 'addon.json', 'models/a.dx90.vtx.bak']) assert.ok(!isGmaAllowed(no), no);
   });
 
-  await test('native .gma writer: whitelist filter, map first, split into parts, contents intact', () => {
+  await test('native .gma writer: whitelist filter, map first, split into parts, contents intact, console kept alive', async () => {
     const dir = path.join(root, 'addon');
     const files = { 'maps/x.bsp': Buffer.alloc(3000, 1), 'materials/a.vmt': 'AAA', 'materials/b.vtf': Buffer.alloc(5000, 2), 'sound/c.wav': Buffer.alloc(4000, 3), 'scripts/soundscapes_x.txt': 'nope' };
     for (const [rel, data] of Object.entries(files)) put(dir, rel, data);
     const json = writeAddonJson(dir, { title: 'x', tags: ['Build', 'bogus'], ignore: ['scripts/soundscapes_x.txt'] });
     assert.deepStrictEqual([json.type, json.tags, json.ignore], ['map', ['build'], ['scripts/soundscapes_x.txt']]);
-    const res = buildGMAs({ dir, outBase: path.join(root, 'addon_out'), title: 'My Map', tags: ['roleplay'], splitBytes: 9000 });
+    const stop = loopTurns();
+    const res = await buildGMAs({ dir, outBase: path.join(root, 'addon_out'), title: 'My Map', tags: ['roleplay'], splitBytes: 9000 });
+    const turns = stop();
+    assert.ok(turns >= 4, `the event loop turned while the archives were written (${turns} turns)`);
     assert.deepStrictEqual(res.rejected, ['scripts/soundscapes_x.txt']);
     assert.strictEqual(res.archives.length, 2);
     const seen = [];
@@ -269,7 +323,7 @@ const vmt = (tex, extra = '') => `"VertexLitGeneric"\n{\n\t"$basetexture" "${tex
       }
     });
     assert.deepStrictEqual(seen, ['maps/x.bsp', 'materials/a.vmt', 'materials/b.vtf', 'sound/c.wav']);
-    const single = buildGMAs({ dir, outBase: path.join(root, 'addon_single'), title: 'My Map', tags: [] });
+    const single = await buildGMAs({ dir, outBase: path.join(root, 'addon_single'), title: 'My Map', tags: [] });
     assert.deepStrictEqual(single.archives.map((a) => path.basename(a.file)), ['addon_single.gma']);
   });
 
@@ -330,6 +384,18 @@ const vmt = (tex, extra = '') => `"VertexLitGeneric"\n{\n\t"$basetexture" "${tex
     assert.ok(!r.missing.some((m) => m.includes('stars')), 'optional material of startexture is not reported');
   });
 
+  await test('names with spaces, accents or "#" are extracted; invalid ones are reported, never silently dropped', async () => {
+    W('materials/mur béton/brique rouge.vmt', vmt('mur béton/brique rouge')); W('materials/mur béton/brique rouge.vtf', 'x');
+    W('models/props/max.mdl', F.makeMDL({ textures: ['material #25'], cdtextures: ['models/props/'] })); W('models/props/max.vvd', 'v'); W('models/props/max.dx90.vtx', 'v');
+    W('materials/models/props/material #25.vmt', vmt('models/props/material #25')); W('materials/models/props/material #25.vtf', 'x');
+    const world = 'world\n{\n\t"id" "1"\n\t"classname" "worldspawn"\n\tsolid\n\t{\n\t\t"id" "2"\n\t\tside\n\t\t{\n\t\t\t"material" "MUR BÉTON/BRIQUE ROUGE"\n\t\t}\n\t}\n}\n';
+    const file = put(root, 'src/names.vmf', world + ent('prop_static', { model: 'models/props/max.mdl' }) + ent('infodecal', { texture: 'decals/bad*name' }));
+    const out = path.join(root, 'out_names');
+    const r = await new Scraper({ gamepath: game, vmf: file, outputDir: out, cacheDir }).run();
+    for (const f of ['materials/mur béton/brique rouge.vmt', 'materials/mur béton/brique rouge.vtf', 'materials/models/props/material #25.vmt', 'materials/models/props/material #25.vtf']) assert.ok(fs.existsSync(path.join(out, f)), f);
+    assert.ok(r.unsafePaths.includes('materials/decals/bad*name'), JSON.stringify(r.unsafePaths));
+  });
+
   await test('particles: only the systems the map uses (and their children) are followed; stock names are recognised', async () => {
     const pcf = F.makePCF([
       { name: 'portal_main', material: 'particle/used_a.vmt', children: ['portal_child'] },
@@ -369,6 +435,12 @@ const vmt = (tex, extra = '') => `"VertexLitGeneric"\n{\n\t"$basetexture" "${tex
     assert.strictEqual(parseArgs(['x.bsp']).opts.bsp, 'x.bsp');
     assert.deepStrictEqual(parseArgs(['whatever.txt']).errors, ['whatever.txt']);
     assert.strictEqual(resolveSettings(parseArgs(['--no-optimize-textures']), { defaults: { optimizeTextures: true } }).optimizeTextures, false);
+    assert.deepStrictEqual(parseArgs(['x.vmf', '--dryrun', '--optimise-textures', '--gma=1']).errors, ['--dryrun', '--optimise-textures', '--gma=1'], 'typos are refused');
+    const eq = parseArgs(['--game=C:\\Steam\\garrysmod', '--out', 'D:\\out', '--tags=build']);
+    assert.deepStrictEqual([eq.opts.game, eq.opts.out, eq.opts.tags, eq.errors], ['C:\\Steam\\garrysmod', 'D:\\out', 'build', []]);
+    const gap = parseArgs(['--out', '--gma']);
+    assert.deepStrictEqual([gap.noValue, gap.flags.has('gma')], [['--out'], true], 'the next flag is not swallowed as a value');
+    assert.deepStrictEqual(parseArgs(['x.vmf', '--title']).noValue, ['--title']);
   });
 
   fs.rmSync(root, { recursive: true, force: true });

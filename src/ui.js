@@ -127,7 +127,12 @@ function createStatus(t, fmt) {
   const timer = tty ? setInterval(draw, 100) : null;
   if (timer && timer.unref) timer.unref();
   return {
-    phase(m, quiet) { msg = m; bar = null; if (!tty && !quiet && m !== lastPrinted) { lastPrinted = m; console.log(gray(`- ${m}`)); } },
+    phase(m, quiet) {
+      const changed = m !== msg || bar !== null;
+      msg = m; bar = null;
+      if (tty) { if (changed) draw(); } // right away: the next step may keep the event loop busy for a while
+      else if (!quiet && m !== lastPrinted) { lastPrinted = m; console.log(gray(`- ${m}`)); }
+    },
     progress(p) {
       if (!bar) started = Date.now();
       bar = p;

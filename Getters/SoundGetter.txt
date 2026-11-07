@@ -1,5 +1,0 @@
-closesound
-noise1
-noise2
-startclosesound
-message

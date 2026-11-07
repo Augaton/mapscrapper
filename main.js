@@ -34,18 +34,30 @@ const FLAG_OF = {
   workshop: 'workshop', fromWorkshop: 'from-workshop', gma: 'gma', openReport: 'open',
 };
 const VALUE_OPTS = ['game', 'vmf', 'bsp', 'out', 'max-texture', 'optimize', 'threads', 'exclude-workshop', 'split-mb', 'title', 'tags', 'lang'];
+// Every other --flag is refused: a typo (--dryrun, --optimise-textures) must never run a different job than asked.
+const BOOL_FLAGS = new Set([
+  'help', 'h', 'all', 'materials', 'models', 'sounds', 'publish', 'dry-run', 'watch', 'yes', 'no-wait', 'save-defaults',
+  'install-context-menu', 'uninstall-context-menu',
+  ...Object.values(FLAG_OF).flatMap((f) => [f, `no-${f}`]),
+]);
 const PRESETS = ['analyse', 'extract', 'publish', 'update', 'watch', 'custom'];
 
 // ---------- args / settings ----------
 
+/** errors: unknown tokens / flags; noValue: value options given without a value. Accepts "--opt value" and "--opt=value". */
 function parseArgs(argv) {
-  const a = { flags: new Set(), opts: {}, errors: [] };
+  const a = { flags: new Set(), opts: {}, errors: [], noValue: [] };
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i];
     if (tok.startsWith('--')) {
-      const name = tok.slice(2);
-      if (VALUE_OPTS.includes(name)) a.opts[name] = argv[++i];
-      else a.flags.add(name);
+      const eq = tok.indexOf('=');
+      const name = eq > 0 ? tok.slice(2, eq) : tok.slice(2);
+      if (VALUE_OPTS.includes(name)) {
+        const value = eq > 0 ? tok.slice(eq + 1) : argv[i + 1];
+        if (value === undefined || (eq < 0 && value.startsWith('--'))) a.noValue.push(`--${name}`);
+        else { a.opts[name] = value; if (eq < 0) i++; }
+      } else if (eq < 0 && BOOL_FLAGS.has(name)) a.flags.add(name);
+      else a.errors.push(tok);
     } else if (/\.vmf$/i.test(tok)) a.opts.vmf = tok; // drag & drop
     else if (/\.bsp$/i.test(tok)) a.opts.bsp = tok;
     else a.errors.push(tok);
@@ -235,12 +247,12 @@ async function runOptimize(dir, s, normalMaps, ctx) {
   return res;
 }
 
-function runGma(result, s, title, gamepath, ctx) {
+async function runGma(result, s, title, gamepath, ctx) {
   const { t, fmt } = ctx;
   const status = ui.createStatus(t, fmt);
   let res;
   try {
-    res = buildGMAs({
+    res = await buildGMAs({
       dir: result.outputDir, outBase: result.outputDir, title, tags: s.tags, splitBytes: s.splitMb * 1048576,
       onProgress: (part, parts, done, total) => status.phase(t('gma.progress', { part: parts > 1 ? `${part}/${parts} ` : '', percent: total ? Math.round((done / total) * 100) : 100 }), true),
     });
@@ -287,7 +299,7 @@ async function runMap(job, ctx) {
     }
     const title = job.title || result.mapname;
     if (extract.others) writeAddonJson(result.outputDir, { title, tags: s.tags, ignore: result.notGmaAllowed });
-    if (s.gma) gmaRes = runGma(result, s, title, gamepath, ctx);
+    if (s.gma) gmaRes = await runGma(result, s, title, gamepath, ctx);
   }
   result.reports = writeReports(result, { optRes, gmaRes, t, fmt, version });
   return result;
@@ -437,10 +449,19 @@ async function main() {
   const lang = pickLang(args, cfg);
   const ctx = { t: makeT(lang), fmt: ui.makeFmt(lang), cfg, args };
   const tty = !!process.stdin.isTTY;
-  const end = () => { if (!args.flags.has('no-wait') && tty) ui.waitForExit(ctx.t); else ui.closePrompts(); };
+  // The update check runs in the background (it used to delay the start menu by up to 3 s); its notice comes at the end.
+  let latest = null, updateShown = false;
+  const showUpdate = () => {
+    if (updateShown || !latest || !isNewer(latest, version)) return;
+    updateShown = true;
+    console.log(`\n${gray('-')} ${red(ctx.t('cli.outdated'))} ${gray(`${ctx.t('cli.latest', { version: latest })} · https://github.com/SpySpaille/MapScraper`)}`);
+  };
+  const end = () => { showUpdate(); if (!args.flags.has('no-wait') && tty) ui.waitForExit(ctx.t); else ui.closePrompts(); };
 
   if (args.flags.has('help') || args.flags.has('h')) { usage(ctx.t); return; }
   if (args.errors.length) throw new Error(ctx.t('cli.unknownArg', { args: args.errors.join(' ') }));
+  if (args.noValue.length) throw new Error(ctx.t('cli.missingValue', { opts: args.noValue.join(' ') }));
+  if (args.flags.has('watch') && args.flags.has('gma')) throw new Error(ctx.t('cli.watchGma'));
   if (args.flags.has('install-context-menu') || args.flags.has('uninstall-context-menu')) {
     if (!toggleContextMenu(args.flags.has('install-context-menu'), ctx)) process.exitCode = 1;
     return;
@@ -465,8 +486,8 @@ async function main() {
 
   console.log(green(figlet.textSync('MapScraper')));
   console.log(`${gray(ctx.t('cli.madeBy'))} ${white('SpySpaille')} ${gray('❤️')}`);
-  const latest = await checkVersion();
-  console.log(`${gray('-')} ${green(ctx.t('cli.version'))} ${white(version)}${latest && isNewer(latest, version) ? ` ${red(ctx.t('cli.outdated'))} ${gray(`${ctx.t('cli.latest', { version: latest })} · https://github.com/SpySpaille/MapScraper`)}` : ''}\n`);
+  checkVersion().then((v) => { latest = v; });
+  console.log(`${gray('-')} ${green(ctx.t('cli.version'))} ${white(version)}\n`);
 
   let vmf = args.opts.vmf, bsp = args.opts.bsp;
   for (const f of [vmf, bsp]) if (f && validMap(ctx.t)(f)) throw new Error(ctx.t('cli.invalidMap', { file: f }));
@@ -483,12 +504,12 @@ async function main() {
     const all = args.flags.has('all') || !['materials', 'models', 'sounds', 'publish'].some((f) => args.flags.has(f));
     extract = { materials: all || args.flags.has('materials'), models: all || args.flags.has('models'), sounds: all || args.flags.has('sounds'), others: all || args.flags.has('publish') };
     s = { ...s, dryRun: args.flags.has('dry-run'), watch: args.flags.has('watch') };
-    if (s.watch) s.incremental = true;
+    if (s.watch) { s.incremental = true; s.gma = false; } // same as the "watch" menu entry: no .gma rebuilt after every compile
   } else { // a human: start menu (also after a drag & drop, where no option can be typed)
     interactive = true;
     for (;;) {
       const action = await chooseAction(ctx, direct ? path.basename(vmf || bsp) : '');
-      if (!action) { ui.closePrompts(); return; }
+      if (!action) { showUpdate(); ui.closePrompts(); return; }
       if (action === 'settings') { await settingsMenu(ctx); s = resolveSettings(args, ctx.cfg); continue; }
       if (action === 'optimize') {
         await optimizeFolder(path.resolve(await ui.askUntil(ctx.t('ask.optimizeFolder'), (p) => (p && fs.existsSync(p) ? null : ctx.t('cli.folderNotFound', { dir: p })), ctx.t)));
@@ -510,7 +531,7 @@ async function main() {
   if (result) {
     console.log(`\n${gray(ctx.t('sum.report'))} ${white(result.reports.txt)}`);
     console.log(`${gray(ctx.t('sum.reportHtml'))} ${white(result.reports.html)}`);
-    if (s.watch && !s.dryRun) { await watchMap(job, result, ctx); return; }
+    if (s.watch && !s.dryRun) { showUpdate(); await watchMap(job, result, ctx); return; }
     console.log(`\n${bold(green(ctx.t('cli.thanks')))}`);
     if (Date.now() - started > 30000) ui.bell();
     if (tty && s.openReport && !args.flags.has('no-wait')) ui.openPath(result.reports.html);

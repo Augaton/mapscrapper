@@ -36,7 +36,7 @@ const en = {
   'warn.compressNoTool': 'BSP compression skipped: no bspzip found.',
   'warn.compressNothing': "BSP compression did nothing ({detail}). Garry's Mod's own bspzip ignores -repack: install bspzipplusplus.exe (ficool2) in GarrysMod/bin/win64.",
   'warn.copyFailed': 'Could not copy {file}: {error}',
-  'warn.unsafePaths': '{count} referenced paths try to leave the game folder and were ignored: {files}',
+  'warn.unsafePaths': '{count} referenced paths are invalid file names or try to leave the game folder, and were ignored: {files}',
   'note.bspOnly': 'The compiled BSP references content that is not in the VMF ({materials} materials, {models} models, {sounds} sounds): it was added to the output because the BSP is what gets published.',
   'note.bspOlder': 'The compiled BSP is older than the VMF: recompile before publishing if the map changed.',
   'note.soundscriptFile': 'Soundscript "{name}" comes from {file}: that file must be loaded by the game (game_sounds_manifest.txt or maps/{map}_level_sounds.txt).',
@@ -54,12 +54,14 @@ const en = {
   // ----- cli: general
   'cli.madeBy': 'Made by',
   'cli.version': 'Version:',
-  'cli.outdated': '(Outdated)',
+  'cli.outdated': 'A new version of MapScraper is available',
   'cli.latest': 'latest: {version}',
   'cli.thanks': 'Thanks for using MapScraper 👍',
   'cli.pressEnter': 'Press enter to close the program',
   'cli.error': 'An error occurred:',
   'cli.unknownArg': 'Unknown argument: {args} (expected a .vmf / .bsp file or --options, see --help)',
+  'cli.missingValue': 'Missing value after {opts} (e.g. --out "C:\\addons\\mymap" or --out="C:\\addons\\mymap")',
+  'cli.watchGma': '--watch re-extracts after every compile and does not build a .gma: run once with --gma when you are done',
   'cli.inputClosed': 'Input closed (stdin ended before all questions were answered)',
   'cli.invalidYN': 'Invalid input (y/n)',
   'cli.invalidChoice': 'Invalid choice',
@@ -248,7 +250,7 @@ Input
   --all | --materials --models --sounds --publish                 what to extract (default: everything)
   --dry-run               analyse and write the reports only, copy nothing
   --incremental           keep the output folder: copy only new/changed files, delete the ones no longer needed
-  --watch                 stay open and re-extract (incrementally) every time the map is compiled
+  --watch                 stay open and re-extract (incrementally) every time the map is compiled (no .gma)
   --all-skins             copy the materials of every model skin (default: only the skins used by the map)
 
 Workshop
@@ -307,7 +309,7 @@ const fr = {
   'warn.compressNoTool': 'Compression du BSP ignorée : aucun bspzip trouvé.',
   'warn.compressNothing': 'La compression du BSP n\'a rien changé ({detail}). Le bspzip de Garry\'s Mod ignore -repack : installe bspzipplusplus.exe (ficool2) dans GarrysMod/bin/win64.',
   'warn.copyFailed': 'Copie impossible de {file} : {error}',
-  'warn.unsafePaths': '{count} chemins référencés tentent de sortir du dossier du jeu et ont été ignorés : {files}',
+  'warn.unsafePaths': '{count} chemins référencés sont des noms de fichier invalides ou tentent de sortir du dossier du jeu, et ont été ignorés : {files}',
   'note.bspOnly': 'Le BSP compilé référence du contenu absent du VMF ({materials} matériaux, {models} modèles, {sounds} sons) : il a été ajouté à la sortie, car c\'est le BSP qui est publié.',
   'note.bspOlder': 'Le BSP compilé est plus ancien que le VMF : recompile avant de publier si la map a changé.',
   'note.soundscriptFile': 'Le soundscript « {name} » vient de {file} : ce fichier doit être chargé par le jeu (game_sounds_manifest.txt ou maps/{map}_level_sounds.txt).',
@@ -323,12 +325,14 @@ const fr = {
   'ref.at': 'en',
   'cli.madeBy': 'Créé par',
   'cli.version': 'Version :',
-  'cli.outdated': '(obsolète)',
+  'cli.outdated': 'Une nouvelle version de MapScraper est disponible',
   'cli.latest': 'dernière : {version}',
   'cli.thanks': 'Merci d\'utiliser MapScraper 👍',
   'cli.pressEnter': 'Appuie sur Entrée pour fermer le programme',
   'cli.error': 'Une erreur est survenue :',
   'cli.unknownArg': 'Argument inconnu : {args} (attendu : un fichier .vmf / .bsp ou des --options, voir --help)',
+  'cli.missingValue': 'Valeur manquante après {opts} (ex. --out "C:\\addons\\mamap" ou --out="C:\\addons\\mamap")',
+  'cli.watchGma': '--watch ré-extrait après chaque compilation et ne construit pas de .gma : relance une fois avec --gma quand tu as fini',
   'cli.inputClosed': 'Entrée fermée avant la fin des questions',
   'cli.invalidYN': 'Réponse invalide (o/n)',
   'cli.invalidChoice': 'Choix invalide',
@@ -510,7 +514,7 @@ Entrée
   --all | --materials --models --sounds --publish                 quoi extraire (défaut : tout)
   --dry-run               analyse et écrit les rapports seulement, ne copie rien
   --incremental           garde le dossier de sortie : ne copie que le nouveau/modifié, supprime ce qui ne sert plus
-  --watch                 reste ouvert et ré-extrait (en incrémental) à chaque compilation de la map
+  --watch                 reste ouvert et ré-extrait (en incrémental) à chaque compilation de la map (sans .gma)
   --all-skins             copie les matériaux de tous les skins des modèles (défaut : seulement ceux utilisés par la map)
 
 Workshop

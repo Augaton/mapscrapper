@@ -298,6 +298,10 @@ const solid = (id, materials) => `\tsolid\n\t{\n\t\t"id" "${id}"\n${materials.ma
     const bad = run(['nonsense.txt'], '');
     assert.strictEqual(bad.status, 1);
     assert.ok(bad.stderr.includes('nonsense.txt'));
+    const typo = run([vmfFile, '--dryrun', '--no-wait'], ''); // used to run a full extraction instead of a dry run
+    assert.ok(typo.status === 1 && typo.stderr.includes('--dryrun'), typo.stdout + typo.stderr);
+    const watchGma = run([vmfFile, '--watch', '--gma', '--no-wait'], '');
+    assert.ok(watchGma.status === 1 && watchGma.stderr.includes('--watch'), watchGma.stdout + watchGma.stderr);
   });
 
   fs.rmSync(root, { recursive: true, force: true });

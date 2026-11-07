@@ -3,7 +3,7 @@
 // Two steps: plan() works out what is needed (fast, nothing is written), execute() writes the output with progress.
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const kv = require('./kv');
 const { parseMDL, texturesForSkins, vtxReplacementMaterials } = require('./mdl');
 const { loadStockIndex, readVpkFile } = require('./vpk');
@@ -28,6 +28,9 @@ const ASSET_IN_TEXT = /[\w\/\\.\-]+\.(?:mdl|vmt|vtf|wav|mp3|ogg|pcf)\b/gi;
 const STATE_VERSION = 1;
 // The engine strips whatever extension a VMT gives to a texture name, then looks for the .vtf
 const TEXTURE_EXTS = ['.vtf', '.vmt', '.tga', '.psd', '.png', '.jpg', '.jpeg', '.bmp'];
+// Output files are written under this suffix, then renamed (same suffix as optimize.js): an interrupted run never
+// leaves a truncated file under its real name, which a later --incremental run would otherwise keep.
+const TMP_SUFFIX = '.mstmp';
 
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 const isFile = (p) => { const st = fs.statSync(p, { throwIfNoEntry: false }); return !!st && st.isFile(); };
@@ -44,6 +47,8 @@ function stripExt(p, exts) {
   return p;
 }
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Give the event loop one turn, so that the console status line can redraw before / during a long step. */
+const breathe = () => new Promise((r) => setImmediate(r));
 
 /** A game-relative path taken from untrusted data (map, material, model, addon) must stay inside the folder it is joined to. */
 function isSafeRel(key) {
@@ -617,7 +622,8 @@ class Scraper {
   cleanMaterialName(v, exts) {
     let m = norm(v).replace(/^materials\//, '');
     m = stripExt(m, exts);
-    if (!m || !K.SAFE.test(m) || !/[a-z]/.test(m) || m.startsWith('_rt_') || m === 'env_cubemap') return null;
+    if (!m || !/\p{L}/u.test(m) || m.startsWith('_rt_') || m === 'env_cubemap') return null;
+    if (!K.SAFE.test(m)) { this.unsafe.add(`materials/${m}`); return null; } // reported, never silently dropped
     return m;
   }
 
@@ -663,7 +669,8 @@ class Scraper {
 
   addSkybox(name) {
     const n = norm(name);
-    if (!n || !K.SAFE.test(n)) return;
+    if (!n) return;
+    if (!K.SAFE.test(n)) { this.unsafe.add(`materials/skybox/${n}`); return; }
     for (const side of SKY_SIDES) {
       this.addMaterial(`skybox/${n}${side}`);
       this.addMaterial(`skybox/${n}_hdr${side}`, true);
@@ -676,7 +683,8 @@ class Scraper {
   addModel(v, skin) {
     if (!this.extract.models) return;
     const m = norm(v);
-    if (!m.endsWith('.mdl') || !K.SAFE.test(m)) return;
+    if (!m.endsWith('.mdl')) return;
+    if (!K.SAFE.test(m)) { this.unsafe.add(m); return; }
     this.ref(m);
     let set = this.modelSkins.get(m);
     const before = set === 'all' ? -1 : set ? set.size : 0;
@@ -986,9 +994,20 @@ class Scraper {
     return null;
   }
 
-  runTool(exe, args) {
-    const r = spawnSync(exe, args, { env: { ...process.env, VPROJECT: this.gamepath }, encoding: 'utf-8', windowsHide: true, timeout: 600000, cwd: path.dirname(exe) });
-    return { ok: r.status === 0, status: r.status, output: String(r.stderr || r.stdout || r.error || '').trim().slice(-300) };
+  /** Run a Valve tool without blocking the event loop (a BSP compression takes minutes: the status line keeps moving). */
+  runTool(exe, args, timeout = 600000) {
+    return new Promise((resolve) => {
+      let out = '', err = '', child;
+      const finish = (status) => resolve({ ok: status === 0, status, output: String(err || out).trim().slice(-300) });
+      try {
+        child = spawn(exe, args, { env: { ...process.env, VPROJECT: this.gamepath }, windowsHide: true, cwd: path.dirname(exe) });
+      } catch (e) { err = e.message; finish(null); return; }
+      const timer = setTimeout(() => child.kill(), timeout);
+      child.stdout.on('data', (d) => { out = (out + d).slice(-4000); });
+      child.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
+      child.on('error', (e) => { err = err || e.message; });
+      child.on('close', (code) => { clearTimeout(timer); finish(code); }); // also emitted after a failed spawn
+    });
   }
 
   /** Path + fingerprint of a file that goes inside the BSP (generated files only exist once execute() ran). */
@@ -1018,7 +1037,7 @@ class Scraper {
     this.stats.files++;
   }
 
-  executeBSP() {
+  async executeBSP() {
     const b = this.bspPlan;
     if (!b) return;
     const names = b.pack.map((x) => x.rel);
@@ -1029,28 +1048,34 @@ class Scraper {
       this.stats.kept++;
     } else {
       this.phase('phase.pack');
+      await breathe();
       fs.mkdirSync(path.dirname(b.dest), { recursive: true });
-      fs.rmSync(b.dest, { force: true });
-      if (b.pack.length) {
-        try { // native pakfile writer: no external tool needed
-          packFiles(b.src, b.dest, b.pack);
-          this.packed = names;
-        } catch (e) { // unusual pakfile: fall back to Valve's tool (bspzipplusplus first: GMod's own bspzip bloats the BSP)
-          fs.rmSync(b.dest, { force: true });
-          const tool = this.findTool(['bspzipplusplus.exe']) || this.findTool(['bspzip.exe']);
-          if (!tool) this.warn('warn.packNoTool', { error: e.message });
-          else {
-            const listFile = path.join(this.outputDir, 'zipfiles.txt');
-            fs.writeFileSync(listFile, b.pack.flatMap((x) => [x.rel, x.abs]).join('\r\n') + '\r\n');
-            const r = this.runTool(tool, ['-addorupdatelist', b.src, listFile, b.dest]);
-            fs.rmSync(listFile, { force: true });
-            if (r.ok && isFile(b.dest)) this.packed = names;
-            else { fs.rmSync(b.dest, { force: true }); this.warn('warn.packFailed', { error: e.message, tool: path.basename(tool), status: r.status, output: r.output }); }
+      // built under a temporary name (still ending in .bsp for Valve's tools), renamed once complete
+      const work = path.join(path.dirname(b.dest), `${this.mapname}${TMP_SUFFIX}.bsp`);
+      fs.rmSync(work, { force: true });
+      try {
+        if (b.pack.length) {
+          try { // native pakfile writer: no external tool needed
+            packFiles(b.src, work, b.pack);
+            this.packed = names;
+          } catch (e) { // unusual pakfile: fall back to Valve's tool (bspzipplusplus first: GMod's own bspzip bloats the BSP)
+            fs.rmSync(work, { force: true });
+            const tool = this.findTool(['bspzipplusplus.exe']) || this.findTool(['bspzip.exe']);
+            if (!tool) this.warn('warn.packNoTool', { error: e.message });
+            else {
+              const listFile = path.join(this.outputDir, 'zipfiles.txt');
+              fs.writeFileSync(listFile, b.pack.flatMap((x) => [x.rel, x.abs]).join('\r\n') + '\r\n');
+              const r = await this.runTool(tool, ['-addorupdatelist', b.src, listFile, work]);
+              fs.rmSync(listFile, { force: true });
+              if (r.ok && isFile(work)) this.packed = names;
+              else { fs.rmSync(work, { force: true }); this.warn('warn.packFailed', { error: e.message, tool: path.basename(tool), status: r.status, output: r.output }); }
+            }
           }
         }
-      }
-      if (!isFile(b.dest)) fs.copyFileSync(b.src, b.dest);
-      if (this.compressBsp) { this.phase('phase.compress'); this.compressOutputBsp(b.dest); }
+        if (!isFile(work)) await fs.promises.copyFile(b.src, work);
+        if (this.compressBsp) { this.phase('phase.compress'); await this.compressOutputBsp(work); }
+        fs.renameSync(work, b.dest);
+      } catch (e) { fs.rmSync(work, { force: true }); throw e; }
       this.stats.written++;
     }
     const lost = this.notGmaAllowed.filter((f) => !this.packed.includes(f));
@@ -1059,11 +1084,11 @@ class Scraper {
     this.account(b.rel, fs.statSync(b.dest).size);
   }
 
-  compressOutputBsp(dest) {
+  async compressOutputBsp(dest) {
     const before = fs.statSync(dest).size;
     const tool = this.findTool(['bspzipplusplus.exe']) || this.findTool(['bspzip.exe']);
     if (!tool) { this.warn('warn.compressNoTool'); return; }
-    const r = this.runTool(tool, ['-repack', '-compress', dest]);
+    const r = await this.runTool(tool, ['-repack', '-compress', dest]);
     const after = fs.statSync(dest).size;
     if (!r.ok || after >= before) {
       this.warn('warn.compressNothing', { detail: `${path.basename(tool)}${r.ok ? '' : `, exit ${r.status}: ${r.output}`}` });
@@ -1147,7 +1172,7 @@ class Scraper {
     const totalBytes = todo.reduce((a, e) => a + e.size, 0), totalFiles = todo.length;
     const dirs = new Set(todo.map((e) => path.dirname(path.join(this.outputDir, e.key))));
     for (const d of dirs) fs.mkdirSync(d, { recursive: true });
-    let next = 0, doneBytes = 0, doneFiles = 0, last = 0;
+    let next = 0, doneBytes = 0, doneFiles = 0, last = 0, fatal = null;
     const emit = (current, force) => {
       const now = Date.now();
       if (!force && now - last < 80) return;
@@ -1155,15 +1180,17 @@ class Scraper {
       this.onProgress({ doneBytes, totalBytes, doneFiles, totalFiles, current });
     };
     const worker = async () => {
-      for (;;) {
+      while (!fatal) { // a full disk stops every worker, not just the one that hit it
         const e = todo[next++];
         if (!e) return;
+        const dest = path.join(this.outputDir, e.key), tmp = `${dest}${TMP_SUFFIX}`;
         try {
-          const dest = path.join(this.outputDir, e.key);
           if (!inside(this.outputDir, dest)) throw new Error('path escapes the output folder'); // defence in depth
-          await fs.promises.copyFile(e.src, dest);
+          await fs.promises.copyFile(e.src, tmp);
+          await fs.promises.rename(tmp, dest);
         } catch (err) {
-          if (err.code === 'ENOSPC') throw err;
+          await fs.promises.rm(tmp, { force: true }).catch(() => {});
+          if (err.code === 'ENOSPC') { fatal = err; return; }
           e.failed = true;
           this.warn('warn.copyFailed', { file: e.key, error: err.message });
         }
@@ -1173,6 +1200,7 @@ class Scraper {
     };
     emit('', true);
     await Promise.all(Array.from({ length: Math.max(1, Math.min(this.copyThreads, todo.length)) }, worker));
+    if (fatal) throw fatal;
     emit('', true);
     for (const e of this.planList) {
       if (e.failed) continue;
@@ -1270,13 +1298,13 @@ class Scraper {
     try {
       if (this.dryRun) {
         for (const e of this.planList) this.account(e.key, e.size);
-        this.executeBSP();
+        await this.executeBSP();
       } else {
         this.phase('phase.prepare');
         this.prepareOutput();
         this.phase('phase.copy');
         await this.copyAll();
-        this.executeBSP();
+        await this.executeBSP();
         this.phase('phase.cleanup');
         this.removeStale();
         try { // atomic: a crash never leaves a half-written state behind

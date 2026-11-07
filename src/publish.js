@@ -47,8 +47,11 @@ function listFiles(dir) {
   return out;
 }
 
-/** Write one .gma. files: [{ rel, abs, size }]. Returns the byte size of the archive. */
-function writeGMA({ out, title, tags, files, onProgress = () => {} }) {
+/** One event-loop turn between files: the console status line keeps redrawing while gigabytes are packed. */
+const breathe = () => new Promise((r) => setImmediate(r));
+
+/** Write one .gma. files: [{ rel, abs, size }]. Resolves to the byte size of the archive. */
+async function writeGMA({ out, title, tags, files, onProgress = () => {} }) {
   const chunk = Buffer.allocUnsafe(1 << 22);
   const eachChunk = (file, fn) => {
     const fd = fs.openSync(file.abs, 'r');
@@ -69,6 +72,7 @@ function writeGMA({ out, title, tags, files, onProgress = () => {} }) {
     eachChunk(f, (b) => { c = crc32(b, c); progress += b.length; });
     f.crc = c;
     onProgress(progress, total, f.rel);
+    await breathe();
   }
 
   const parts = [];
@@ -96,6 +100,7 @@ function writeGMA({ out, title, tags, files, onProgress = () => {} }) {
     for (const f of files) { // pass 2: contents
       eachChunk(f, (b) => { put(b); progress += b.length; });
       onProgress(progress, total, f.rel);
+      await breathe();
     }
     const tail = Buffer.alloc(4); tail.writeUInt32LE(all);
     fs.writeSync(fd, tail); written += 4;
@@ -105,9 +110,9 @@ function writeGMA({ out, title, tags, files, onProgress = () => {} }) {
 
 /**
  * Package a folder into one or several .gma files.
- * @returns {{ archives: {file,size,count}[], rejected: string[] }}
+ * @returns {Promise<{ archives: {file,size,count}[], rejected: string[] }>}
  */
-function buildGMAs({ dir, outBase, title, tags, splitBytes = 0, onProgress }) {
+async function buildGMAs({ dir, outBase, title, tags, splitBytes = 0, onProgress }) {
   const all = listFiles(dir).filter((f) => f.rel !== 'addon.json');
   const rejected = all.filter((f) => !isGmaAllowed(f.rel)).map((f) => f.rel);
   const files = all.filter((f) => isGmaAllowed(f.rel));
@@ -121,14 +126,14 @@ function buildGMAs({ dir, outBase, title, tags, splitBytes = 0, onProgress }) {
     size += f.size;
   }
   const archives = [];
-  groups.forEach((g, i) => {
-    if (!g.length) return;
+  for (const [i, g] of groups.entries()) {
+    if (!g.length) continue;
     const multi = groups.length > 1;
     const file = multi ? `${outBase}_part${i + 1}.gma` : `${outBase}.gma`;
     const t = multi ? `${title} (part ${i + 1}/${groups.length})` : title;
-    const bytes = writeGMA({ out: file, title: t, tags, files: g, onProgress: onProgress && ((d, n, rel) => onProgress(i + 1, groups.length, d, n, rel)) });
+    const bytes = await writeGMA({ out: file, title: t, tags, files: g, onProgress: onProgress && ((d, n, rel) => onProgress(i + 1, groups.length, d, n, rel)) });
     archives.push({ file, size: bytes, count: g.length });
-  });
+  }
   return { archives, rejected };
 }
 

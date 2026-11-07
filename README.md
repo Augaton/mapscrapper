@@ -38,7 +38,8 @@ English or French depending on Windows (`--lang en|fr`), and the game folder is 
 The map list holds the maps you used last, then the most recent VMFs of the same folders. Before anything is
 written the tool tells you how much it is going to copy (and asks above 1 GB), and checks the free disk space.
 
-Scripts and power users: give any option and no question is asked.
+Scripts and power users: give any option and no question is asked. Values can be written `--out dir` or `--out=dir`; an
+unknown option is an error, so a typo never runs a different job than the one asked for.
 
 ```console
 mapscraper "C:\maps\gm_mymap.vmf" --optimize-textures --compress-bsp --gma
@@ -74,7 +75,7 @@ then *View > Go to Coordinates* in Hammer) or to the brush id, so a broken refer
 | `--all` \| `--materials --models --sounds --publish` | what to extract (default: everything) |
 | `--dry-run` | analyse and write the reports only (2 s), copy nothing |
 | `--incremental` | keep the output folder: copy only new / changed files, delete the ones the map no longer needs |
-| `--watch` | stay open and re-extract incrementally every time the VMF / BSP changes |
+| `--watch` | stay open and re-extract incrementally every time the VMF / BSP changes (never builds a `.gma`: refused together with `--gma`) |
 | `--all-skins` | copy the materials of every model skin (default: only the skins the map uses) |
 | `--no-workshop` | do not index the installed workshop addons |
 | `--from-workshop` | extract files that only exist inside installed workshop addons (`.gma`, including LZMA-compressed ones) |
