@@ -45,7 +45,7 @@ function session(defaults = { workshop: false, checkUpdates: false }, extraCfg =
   const cwd = path.join(root, `run${++n}`), config = path.join(root, `cfg${n}`, 'config.json');
   fs.mkdirSync(cwd, { recursive: true });
   put(path.dirname(config), 'config.json', JSON.stringify({ gamepath: game, lang: 'en', defaults, ...extraCfg }));
-  const env = { ...process.env, MAPSCRAPER_CONFIG: config, MAPSCRAPER_OFFLINE: '1', FORCE_COLOR: '0', LOCALAPPDATA: path.join(root, 'cache') }; // the workshop index is cached there
+  const env = { ...process.env, MAPSCRAPER_CONFIG: config, MAPSCRAPER_OFFLINE: '1', FORCE_COLOR: '0', LOCALAPPDATA: path.join(root, 'cache'), XDG_CACHE_HOME: path.join(root, 'cache') }; // the workshop index is cached there
   return {
     cwd, config,
     run: (args, input = '') => spawnSync(process.execPath, [path.join(__dirname, '..', 'main.js'), ...args], { cwd, input, encoding: 'utf-8', env }),

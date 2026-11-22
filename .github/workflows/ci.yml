@@ -1,20 +1,37 @@
 name: CI
 
-# Every push and pull request runs the tests on Windows (the tool is a Windows program: registry, Explorer menu, Steam).
-# Pushing a tag vX.Y.Z also builds the exe and publishes it, with its SHA-256, as a GitHub release.
+# Every push to main and every pull request runs the tests on Windows and on Linux.
+# A push to main that changes the program (see scripts/release.js) is then released on its own, under an automatic version:
+#   MapScraper.exe (Windows) and mapscraper-linux-x64.tar.gz (Linux), each with its SHA-256, on a GitHub release.
+# Nothing to tag or to edit. "Run workflow" (Actions tab) releases by hand and lets you choose the bump. Rules: README, "Releasing".
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump (auto = from the commit messages since the last release)
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
-    runs-on: windows-latest
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,33 +43,140 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
+  plan:
+    name: plan the release
     needs: test
-    runs-on: windows-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write # create the release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
     steps:
-      # The token is not left in .git/config while "npm ci" runs the install scripts of the dependencies (gh gets it from GH_TOKEN),
-      # and the exe that is shipped is built without restoring any cache.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tags and the history since the last release
+          persist-credentials: false
+      - id: plan
+        env:
+          BUMP: ${{ inputs.bump || 'auto' }}
+          EVENT: ${{ github.event_name == 'workflow_dispatch' && 'dispatch' || 'push' }}
+        run: node scripts/release.js plan --bump "$BUMP" --event "$EVENT" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            build: build
+            files: |
+              dist/MapScraper.exe
+              dist/MapScraper.exe.sha256
+          - name: linux
+            os: ubuntu-latest
+            build: build:linux
+            files: |
+              dist/mapscraper-linux-x64.tar.gz
+              dist/mapscraper-linux-x64.tar.gz.sha256
+    steps:
+      # The token is not left in .git/config while "npm ci" runs the install scripts of the dependencies, and the binaries that
+      # are shipped are built from a clean install: no cache is restored.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm ci
-      - name: The tag, package.json and CHANGELOG.md agree
-        shell: bash
-        run: |
-          version="$(node -p "require('./package.json').version")"
-          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME but package.json says $version"; exit 1; }
-          awk -v v="$version" '$0 ~ "^## " v {f=1; next} /^## /{f=0} f' CHANGELOG.md > release-notes.md
-          test -s release-notes.md || { echo "CHANGELOG.md has no '## $version' section"; exit 1; }
-      - run: npm run build
-      - name: Publish the release
+      - name: Set the version (the binary shows it)
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" dist/MapScraper.exe dist/MapScraper.exe.sha256 --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: node scripts/release.js apply --version "$VERSION"
+      - run: npm ci
+      - run: npm run ${{ matrix.build }}
+      - name: Package (Linux)
+        if: matrix.name == 'linux'
+        run: |
+          chmod +x dist/mapscraper
+          tar --owner=0 --group=0 --numeric-owner --mode=755 -czf dist/mapscraper-linux-x64.tar.gz -C dist mapscraper
+          node scripts/checksum.js dist/mapscraper-linux-x64.tar.gz
+      - name: Smoke test (the binary starts, shows its version, finds its font)
+        shell: bash
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          LEG: ${{ matrix.name }}
+        run: |
+          bin=dist/MapScraper.exe
+          if [ "$LEG" = linux ]; then # the binary as users get it: out of the archive, executable bit included
+            mkdir "$RUNNER_TEMP/unpacked"
+            tar -xzf dist/mapscraper-linux-x64.tar.gz -C "$RUNNER_TEMP/unpacked"
+            bin="$RUNNER_TEMP/unpacked/mapscraper"
+          fi
+          out="$(FORCE_COLOR=0 MAPSCRAPER_LANG=en MAPSCRAPER_OFFLINE=1 MAPSCRAPER_CONFIG="$RUNNER_TEMP/smoke.json" "$bin" missing.vmf --no-wait 2>&1 || true)"
+          echo "$out"
+          grep -q "Version: $VERSION" <<< "$out"
+          grep -q "Invalid map file" <<< "$out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+
+  publish:
+    name: publish the release
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # the version commit, the tag and the release. Only repository scripts run here, never "npm ci".
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: release-*
+          merge-multiple: true
+      - name: Version, changelog and tag
+        id: tag
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
+            echo "$TAG is already pushed (a rerun): only its release page is missing."
+            git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG"
+            git checkout --quiet "$TAG"
+          else
+            git fetch --quiet origin main
+            if [ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]; then
+              echo "::notice::main moved on while this release was built: the run of the newer commit releases it."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            node scripts/release.js apply --version "$VERSION" --changelog
+            git add package.json package-lock.json CHANGELOG.md
+            git diff --cached --quiet || git commit --quiet -m "Release $TAG [skip ci]"
+            git tag -a "$TAG" -m "$TAG"
+            git push --atomic origin HEAD:refs/heads/main "refs/tags/$TAG"
+          fi
+      - name: Create the GitHub release
+        if: steps.tag.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          node scripts/release.js notes --version "$VERSION" > release-notes.md
+          mapfile -t files < <(find artifacts -type f | sort)
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" "${files[@]}" --title "$TAG" --notes-file release-notes.md --verify-tag

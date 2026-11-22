@@ -253,13 +253,13 @@ const solid = (id, materials) => `\tsolid\n\t{\n\t\t"id" "${id}"\n${materials.ma
     assert.ok(s.models.has('models/props/x.mdl') && s.waves.has('a.wav'), 'real paths are still found');
   });
   await test('Windows programs are started by absolute path (a planted reg.exe / explorer.exe in the map folder is never run)', () => {
-    const win = shell.systemPath('System32', 'reg.exe');
-    assert.ok(path.isAbsolute(win) && /[\\/]System32[\\/]reg\.exe$/i.test(win));
     for (const f of ['winshell.js', 'steam.js', 'ui.js', 'scraper.js']) {
       const code = fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf-8');
       assert.ok(!/spawn(?:Sync)?\(\s*['"](?:reg|explorer)(?:\.exe)?['"]/.test(code), `${f} starts a bare command name`);
     }
-    if (!shell.supported()) return;
+    if (!shell.supported()) return; // the rest is about Windows paths and programs
+    const win = shell.systemPath('System32', 'reg.exe');
+    assert.ok(path.isAbsolute(win) && /[\\/]System32[\\/]reg\.exe$/i.test(win));
     const plant = path.join(root, 'planted');
     fs.mkdirSync(plant, { recursive: true });
     fs.copyFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'hostname.exe'), path.join(plant, 'reg.exe'));
@@ -356,10 +356,23 @@ const solid = (id, materials) => `\tsolid\n\t{\n\t\t"id" "${id}"\n${materials.ma
   await test('--json creates the folder of its file: a long run never loses its result', () => {
     const target = path.join(root, 'json_out', 'deep', 'result.json');
     const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'main.js'), vmfFile, '--dry-run', '--json', target, '--game', game, '--no-wait', '--no-open'], {
-      cwd: root, input: '', encoding: 'utf-8', env: { ...process.env, MAPSCRAPER_CONFIG: path.join(root, 'cfg_json', 'config.json'), MAPSCRAPER_OFFLINE: '1', LOCALAPPDATA: cacheDir, FORCE_COLOR: '0' },
+      cwd: root, input: '', encoding: 'utf-8', env: { ...process.env, MAPSCRAPER_CONFIG: path.join(root, 'cfg_json', 'config.json'), MAPSCRAPER_OFFLINE: '1', LOCALAPPDATA: cacheDir, XDG_CACHE_HOME: cacheDir, FORCE_COLOR: '0' },
     });
     assert.strictEqual(r.status, 0, r.stderr + r.stdout);
     assert.strictEqual(JSON.parse(fs.readFileSync(target, 'utf-8')).mapname, 'uxmap');
+  });
+  await test('settings and cache live in the standard places of each platform (APPDATA on Windows, XDG elsewhere)', () => {
+    const { configFile, cacheDir: cacheOf } = require('../src/paths');
+    const n = (p) => p.replace(/\\/g, '/');
+    assert.strictEqual(n(configFile({ APPDATA: 'C:\\Users\\a\\AppData\\Roaming' }, 'win32', 'C:\\Users\\a')), 'C:/Users/a/AppData/Roaming/MapScraper/config.json');
+    assert.strictEqual(n(configFile({}, 'win32', 'C:\\Users\\a')), 'C:/Users/a/MapScraper/config.json', 'the old fallback');
+    assert.strictEqual(n(configFile({ XDG_CONFIG_HOME: '/x/cfg', APPDATA: 'ignored' }, 'linux', '/home/u')), '/x/cfg/MapScraper/config.json');
+    assert.strictEqual(n(configFile({}, 'linux', '/home/u')), '/home/u/.config/MapScraper/config.json');
+    assert.strictEqual(n(cacheOf({ LOCALAPPDATA: 'C:\\L', APPDATA: 'C:\\R' }, 'win32', 'C:\\h', 'C:\\t')), 'C:/L/MapScraper');
+    assert.strictEqual(n(cacheOf({ APPDATA: 'C:\\R' }, 'win32', 'C:\\h', 'C:\\t')), 'C:/R/MapScraper');
+    assert.strictEqual(n(cacheOf({}, 'win32', 'C:\\h', 'C:\\t')), 'C:/t/MapScraper');
+    assert.strictEqual(n(cacheOf({ XDG_CACHE_HOME: '/x/c' }, 'linux', '/home/u', '/tmp')), '/x/c/MapScraper');
+    assert.strictEqual(n(cacheOf({}, 'linux', '/home/u', '/tmp')), '/home/u/.cache/MapScraper', 'not /tmp: the cache must survive a reboot');
   });
 
   console.log('reports');
@@ -438,7 +451,7 @@ const solid = (id, materials) => `\tsolid\n\t{\n\t\t"id" "${id}"\n${materials.ma
     const cwd = path.join(root, 'cli');
     fs.mkdirSync(cwd, { recursive: true });
     const run = (args, input) => spawnSync(process.execPath, [path.join(__dirname, '..', 'main.js'), ...args], {
-      cwd, input, encoding: 'utf-8', env: { ...process.env, MAPSCRAPER_CONFIG: config, MAPSCRAPER_OFFLINE: '1', LOCALAPPDATA: cacheDir, FORCE_COLOR: '0' },
+      cwd, input, encoding: 'utf-8', env: { ...process.env, MAPSCRAPER_CONFIG: config, MAPSCRAPER_OFFLINE: '1', LOCALAPPDATA: cacheDir, XDG_CACHE_HOME: cacheDir, FORCE_COLOR: '0' },
     });
     const first = run(['--game', game, '--lang', 'fr', '--no-wait'], `2\n${vmfFile}\n`); // Extract, then type the path (no recent map yet)
     assert.strictEqual(first.status, 0, first.stderr + first.stdout);

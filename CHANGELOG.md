@@ -20,7 +20,15 @@ Each release is a `## <version>` section below: the release workflow publishes t
 - The output folder is printed before anything is written. `--no-check-updates` / `checkUpdates` switch the version check off.
 - `--watch` prints only what changed between two compiles: files that just became missing and files found again.
 - A rewritten README with a logo and screenshots (`assets/`), grouped options and a security and privacy section.
-- CI: tests on Windows for every push and pull request; a `vX.Y.Z` tag builds the exe and publishes it with its SHA-256.
+- **A Linux version.** Releases now carry `mapscraper-linux-x64.tar.gz` next to `MapScraper.exe`, each with its SHA-256. On Linux the
+  settings live in `~/.config/MapScraper` and the workshop cache in `~/.cache/MapScraper` (`XDG_CONFIG_HOME` / `XDG_CACHE_HOME`
+  honoured); the Explorer menu and `--compress-bsp` (a Windows tool) stay Windows-only. An analysis made by the Linux binary gives the
+  same result as the Windows one.
+- **Automatic releases and versions.** CI: the tests run on Windows and Linux for every push to `main` and every pull request. A push
+  that changes the program is released by itself: the version follows the commit messages (`feat:` minor, `type!:` or `BREAKING CHANGE:`
+  major, otherwise patch), the changelog section and the release commit are made by the workflow, both binaries are started once as a
+  smoke test, and the release is published with the notes. No tag to push. "Run workflow" releases by hand with a chosen bump.
+  Rules: *Releasing* in the README.
 
 ### Changed
 - A second `.vmf` (or `.bsp`) given on the command line, or dropped on the exe, is an error instead of silently replacing the first.

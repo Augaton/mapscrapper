@@ -3,8 +3,8 @@
 // Handles raw GMAs ("GMAD") and LZMA-compressed ones (workshop *_legacy.bin).
 const crypto = require('crypto');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { cacheDir } = require('./paths');
 const { LzmaDecoder, Input, LzmaNeedInput } = require('./lzma');
 
 const INDEX_VERSION = 2;
@@ -86,7 +86,7 @@ class WorkshopIndex {
    */
   constructor(gamepath, o = {}) {
     this.gamepath = gamepath;
-    this.cacheDir = o.cacheDir || path.join(process.env.LOCALAPPDATA || process.env.APPDATA || os.tmpdir(), 'MapScraper');
+    this.cacheDir = o.cacheDir || cacheDir();
     // one index per game install, so scanning another game folder never clobbers this one
     const tag = crypto.createHash('md5').update(path.resolve(gamepath).toLowerCase()).digest('hex').slice(0, 8);
     this.indexFile = path.join(this.cacheDir, `workshop-index-${tag}.json`);

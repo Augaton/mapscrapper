@@ -3,7 +3,6 @@
 // MapScraper CLI: start menu, drag & drop, or flags around src/scraper.js
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const figlet = require('figlet');
 const { Scraper, describeChain } = require('./src/scraper');
@@ -12,6 +11,7 @@ const { buildGMAs, writeAddonJson, cleanTags, readJpegSize, VALID_TAGS } = requi
 const { writeReports } = require('./src/report');
 const { makeT, detectLang, LANGS } = require('./src/i18n');
 const { detectGamePath } = require('./src/steam');
+const { configFile } = require('./src/paths');
 const { watchFiles } = require('./src/watch');
 const shell = require('./src/winshell');
 const ui = require('./src/ui');
@@ -19,7 +19,7 @@ const { version } = require('./package.json');
 
 const { gray, green, red, white, yellow, bold } = ui.colors;
 const LATEST_URL = 'https://raw.githubusercontent.com/SpySpaille/MapScraper/main/package.json';
-const CONFIG_FILE = process.env.MAPSCRAPER_CONFIG || path.join(process.env.APPDATA || os.homedir(), 'MapScraper', 'config.json');
+const CONFIG_FILE = process.env.MAPSCRAPER_CONFIG || configFile();
 const GIB = 1073741824;
 const WORKSHOP_LIMIT = 4 * GIB; // "Current limit is around 4GB": Garry's Mod wiki, Steam Workshop Rules (it was 2 GB in 2020)
 const DUPLICATE_MIN = 20 * 1048576; // a workshop item that already provides less than this is not worth a suggestion

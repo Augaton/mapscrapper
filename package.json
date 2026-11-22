@@ -10,9 +10,10 @@
   },
   "scripts": {
     "start": "node main.js",
-    "test": "node test/run.js && node test/features.js && node test/ux.js && node test/qol.js",
+    "test": "node test/run.js && node test/features.js && node test/ux.js && node test/qol.js && node test/release.js",
     "vector": "node test/make-vector.js",
-    "build": "pkg . --targets node22-win-x64 --output dist/MapScraper.exe && node scripts/checksum.js"
+    "build": "pkg . --targets node22-win-x64 --output dist/MapScraper.exe && node scripts/checksum.js dist/MapScraper.exe",
+    "build:linux": "pkg . --targets node22-linux-x64 --output dist/mapscraper"
   },
   "dependencies": {
     "@colors/colors": "^1.6.0",

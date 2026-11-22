@@ -8,7 +8,7 @@
   <a href="https://github.com/SpySpaille/MapScraper/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/SpySpaille/MapScraper?color=2f9e63"></a>
   <a href="https://github.com/SpySpaille/MapScraper/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/SpySpaille/MapScraper/total?color=2f9e63"></a>
   <a href="https://github.com/SpySpaille/MapScraper/actions/workflows/ci.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/SpySpaille/MapScraper/ci.yml?branch=main&label=tests"></a>
-  <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows-0078d4">
+  <img alt="Platforms: Windows and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078d4">
   <img alt="Node 18 or later" src="https://img.shields.io/badge/node-%E2%89%A518-339933">
   <img alt="License: ISC" src="https://img.shields.io/badge/license-ISC-blue">
 </p>
@@ -43,14 +43,18 @@ published. Whatever it cannot find is reported together with **who uses it**, do
 
 ## Quick start
 
-1. **Download** `MapScraper.exe` from the [latest release](https://github.com/SpySpaille/MapScraper/releases/latest). Each
-   release ships a `.sha256` file: check it with `certutil -hashfile MapScraper.exe SHA256`.
-2. **Put it in a dedicated folder** and double-click it, or **drag a `.vmf` / `.bsp` onto it**. Settings can also add an
-   *Extract with MapScraper* entry to the right-click menu of those files.
-3. **Pick what you want** from the menu. The interface is in English or French depending on Windows (`--lang en|fr`),
-   and the Garry's Mod folder is found through Steam, then remembered.
+1. **Download** the program from the [latest release](https://github.com/SpySpaille/MapScraper/releases/latest): `MapScraper.exe`
+   for Windows, `mapscraper-linux-x64.tar.gz` for Linux. Each file comes with a `.sha256`: check it with
+   `certutil -hashfile MapScraper.exe SHA256` (Windows) or `sha256sum -c mapscraper-linux-x64.tar.gz.sha256` (Linux).
+2. **Windows:** put the exe in a dedicated folder and double-click it, or **drag a `.vmf` / `.bsp` onto it**. Settings can also add
+   an *Extract with MapScraper* entry to the right-click menu of those files.
+   **Linux:** `tar -xzf mapscraper-linux-x64.tar.gz`, then `./mapscraper` (or `./mapscraper map.vmf --dry-run`).
+3. **Pick what you want** from the menu. The interface is in English or French depending on the system (`--lang en|fr`),
+   and the Garry's Mod folder is found through Steam, then remembered (`--game <dir>` to give it).
 
-From source (Node 18 or later): `npm install`, then `npm start`. The Explorer right-click menu is a Windows feature.
+From source (Node 18 or later, Windows or Linux): `npm install`, then `npm start`. On Linux the settings live in
+`~/.config/MapScraper/config.json` and the workshop cache in `~/.cache/MapScraper` (`XDG_CONFIG_HOME` / `XDG_CACHE_HOME` are honoured).
+The Explorer right-click menu, and `--compress-bsp` (it needs the Windows tool `bspzipplusplus.exe`), are Windows-only.
 
 ## Walkthrough
 
@@ -155,7 +159,7 @@ Every on/off option has a `--no-<option>` form. `mapscraper --help` prints the s
 
 ### Configuration
 
-Defaults live in `%APPDATA%\MapScraper\config.json`; the Settings menu edits every one of them.
+Defaults live in `%APPDATA%\MapScraper\config.json` (Linux: `~/.config/MapScraper/config.json`); the Settings menu edits every one of them.
 
 ```json
 {
@@ -172,7 +176,7 @@ The file can be edited by hand. If it is ever not valid JSON, the tool does not 
 
 | Environment | |
 |---|---|
-| `MAPSCRAPER_CONFIG` | path of the config file (default `%APPDATA%\MapScraper\config.json`) |
+| `MAPSCRAPER_CONFIG` | path of the config file (default `%APPDATA%\MapScraper\config.json`, on Linux `$XDG_CONFIG_HOME/MapScraper/config.json`) |
 | `MAPSCRAPER_LANG` | language when neither `--lang` nor the config sets one (`en` / `fr`) |
 | `MAPSCRAPER_OFFLINE=1` | never touch the network |
 | `DEBUG=1` | print the full stack trace of an error |
@@ -280,34 +284,55 @@ timeout, in the background). Only the version number in the answer is read and c
 identifier (GitHub sees your IP address, as for any download). Turn it off with `--no-check-updates`, the Settings menu
 (`checkUpdates`) or `MAPSCRAPER_OFFLINE=1`.
 
-**Releases** are built by GitHub Actions from the tagged commit and published with their SHA-256. To report a vulnerability,
-please open an issue on GitHub; for something sensitive, contact the maintainer through their GitHub profile.
+**Releases** (Windows and Linux) are built by GitHub Actions from the commit they are made of, after the tests passed on both
+systems, started once as a smoke test, and published with their SHA-256. To report a vulnerability, please open an issue on
+GitHub; for something sensitive, contact the maintainer through their GitHub profile.
 
 ## Development
 
 ```console
-npm test         # four self-contained suites (synthetic game folder, BSP / GMA / LZMA / VTF / MDL fixtures, CLI end to end)
-npm run build    # pinned @yao-pkg/pkg → dist/MapScraper.exe + MapScraper.exe.sha256 (verify: certutil -hashfile MapScraper.exe SHA256)
-npm run vector   # regenerate the LZMA test vector (needs the xz command)
+npm test             # five self-contained suites (synthetic game folder, BSP / GMA / LZMA / VTF / MDL fixtures, CLI end to end, release logic)
+npm run build        # pinned @yao-pkg/pkg → dist/MapScraper.exe + MapScraper.exe.sha256 (verify: certutil -hashfile MapScraper.exe SHA256)
+npm run build:linux  # the same program for Linux x64 → dist/mapscraper (the CI packs it as mapscraper-linux-x64.tar.gz)
+npm run vector       # regenerate the LZMA test vector (needs the xz command)
 ```
 
 Source layout: `main.js` (CLI) · `src/scraper.js` (engine: `plan()` then `execute()`) · `src/ui.js` (menus, progress bar) ·
 `src/report.js` (text + HTML reports) · `src/i18n.js` (English / French) · `src/steam.js` · `src/watch.js` · `src/winshell.js` ·
 `src/bsp.js` (BSP reader + pakfile writer) · `src/gma.js` (GMA reader + workshop index) · `src/lzma.js` (LZMA decoder) ·
 `src/publish.js` (whitelist, `.gma` writer) · `src/vtf.js` + `src/optimize.js` (texture codec / optimiser) · `src/mdl.js` ·
-`src/vpk.js` · `src/kv.js` · `src/prefetch.js` (parallel first-open of big file lists) · `assets/` (logo and screenshots of this README).
+`src/vpk.js` · `src/kv.js` · `src/prefetch.js` (parallel first-open of big file lists) · `src/paths.js` (where the settings and the cache live) ·
+`scripts/release.js` (version and notes of a release) · `assets/` (logo and screenshots of this README).
 
 ### Releasing
 
-GitHub Actions (`.github/workflows/ci.yml`) runs `npm test` on Windows for every push and pull request. To publish a version:
+There is nothing to tag and no version to edit. GitHub Actions (`.github/workflows/ci.yml`) runs `npm test` on Windows and Linux for
+every push to `main` and every pull request. When a push to `main` changes the program, the workflow then publishes it by itself:
 
-1. `npm version X.Y.Z --no-git-tag-version` (updates `package.json` and the lockfile) and add a `## X.Y.Z - date` section to
-   `CHANGELOG.md`;
-2. commit, then `git tag vX.Y.Z` and `git push --tags`.
+1. **Plan.** `scripts/release.js` decides whether to release and under which version (below).
+2. **Build.** On Windows `MapScraper.exe`, on Linux `mapscraper-linux-x64.tar.gz`, each with its `.sha256`, each started once as a
+   smoke test that checks the version it shows.
+3. **Publish.** A commit `Release vX.Y.Z` sets the version in `package.json`, the lockfile and `CHANGELOG.md`, the tag `vX.Y.Z` is
+   pushed, and the GitHub release is created with both files and the notes.
 
-The workflow then checks that the tag, `package.json` and the changelog agree, builds `dist/MapScraper.exe`, and creates the GitHub
-release with the exe, its `.sha256`, and that changelog section as the notes. The update notice of installed copies compares their
-version with the `package.json` on `main`, so bump it for every release.
+**What counts.** Only a change in `main.js`, `src/`, `package.json` or `package-lock.json` releases. Documentation, tests, assets and
+CI files alone do not, and neither does a commit whose message contains `[skip release]`. A pending code change is never lost: a
+later documentation push releases it.
+
+**Which version.** The first release uses the version of `package.json`. After that the version is the last release raised by the
+commit messages since then: `feat: ...` is a **minor** bump, `type!: ...` or a `BREAKING CHANGE:` line is a **major** one, anything
+else is a **patch**. To choose another number, either set the version in `package.json` yourself (it is used as it is when it is higher
+than the last release), or use *Actions → CI → Run workflow* and pick `patch`, `minor` or `major` (that button also releases when
+only documentation changed).
+
+**Notes.** Write them as you work under a `## Unreleased` heading in `CHANGELOG.md`: it is renamed to `## X.Y.Z - date` at release
+time. Without one, the notes are the commit subjects since the last release. They always end with a link to the comparison with
+the previous release.
+
+The update notice of installed copies compares their version with the `package.json` on `main`, which the release commit keeps up to
+date. The workflow needs *Settings → Actions → General → Workflow permissions → Read and write* (it pushes the release commit and the
+tag), and a rule that lets it push to `main`. If a release fails after its tag was pushed, run the failed jobs again: only the missing
+release page is created.
 
 ## License
 
