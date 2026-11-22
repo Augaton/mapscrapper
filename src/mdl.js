@@ -10,7 +10,7 @@ function parseMDL(buf) {
   const version = buf.readInt32LE(4);
   if (version < 44 || version > 49) return null;
 
-  const i32 = (o) => (o + 4 <= buf.length ? buf.readInt32LE(o) : 0);
+  const i32 = (o) => (o >= 0 && o + 4 <= buf.length ? buf.readInt32LE(o) : 0); // a negative offset (hostile file) reads as 0, never throws
   const cstr = (off) => {
     if (off <= 0 || off >= buf.length) return '';
     let end = buf.indexOf(0, off);

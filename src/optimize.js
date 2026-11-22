@@ -7,6 +7,7 @@ const path = require('path');
 const { Worker, isMainThread, parentPort } = require('worker_threads');
 const vtf = require('./vtf');
 const kv = require('./kv');
+const { prefetch } = require('./prefetch');
 
 const COMPRESSED = new Set([13, 14, 15, 20]);
 const LOSSLESS_MIN = 16 * 1024; // the lossless DXT5 -> DXT1 pass pays off even on small textures
@@ -117,7 +118,9 @@ async function optimizeTextures(dir, o = {}) {
 
   const jobs = [];
   const head = Buffer.alloc(512);
-  for (const file of walk(dir)) {
+  const vtfs = walk(dir);
+  await prefetch(vtfs); // the folder was just written: see prefetch.js
+  for (const file of vtfs) {
     const size = fs.statSync(file).size;
     if (size < LOSSLESS_MIN) continue;
     const rel = path.relative(dir, file).split(path.sep).join('/');

@@ -131,10 +131,15 @@ class BSP {
   }
 }
 
+// No file we parse out of a pakfile (VMT, MDL, script, PCF...) gets near this: a hostile header can claim 4 GiB, or hide a
+// 200 KB deflate stream that inflates to hundreds of MB.
+const MAX_ENTRY = 1 << 29;
+
 /** Tiny zip reader (stored / deflate / lzma entries), enough for BSP pakfiles. */
 class Pak {
   constructor(buf) {
     this.buf = buf;
+    this.damaged = new Set(); // entries that exist but could not be read (reported once, by the scraper)
     this.entries = new Map(); // lowercased path -> { name, method, csize, usize, offset }
     let e = -1;
     for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65535); i--) {
@@ -158,20 +163,24 @@ class Pak {
   get size() { return this.entries.size; }
   names() { return this.entries.keys(); }
 
+  /** Content of an entry; null when it is absent or damaged. A bad entry must not abort the analysis of the whole map. */
   read(rel) {
     const en = this.entries.get(rel);
     if (!en) return null;
-    const b = this.buf, o = en.offset;
-    if (o + 30 > b.length || b.readUInt32LE(o) !== 0x04034b50) return null;
-    const start = o + 30 + b.readUInt16LE(o + 26) + b.readUInt16LE(o + 28);
-    const data = b.subarray(start, start + en.csize);
-    if (en.method === 0) return Buffer.from(data);
-    if (en.method === 8) return zlib.inflateRawSync(data);
-    if (en.method === 14) { // zip-lzma: version(2) propsSize(2) props(5) stream
-      const ps = data.readUInt16LE(2);
-      return decompressRaw(data.subarray(4, 4 + ps), en.usize, data, 4 + ps);
-    }
-    return null;
+    try {
+      const b = this.buf, o = en.offset;
+      if (o + 30 > b.length || b.readUInt32LE(o) !== 0x04034b50) throw new Error('bad local header');
+      if (en.usize > MAX_ENTRY) throw new Error('entry too large');
+      const start = o + 30 + b.readUInt16LE(o + 26) + b.readUInt16LE(o + 28);
+      const data = b.subarray(start, start + en.csize);
+      if (en.method === 0) return Buffer.from(data);
+      if (en.method === 8) return zlib.inflateRawSync(data, { maxOutputLength: Math.max(en.usize, 1) }); // a stream longer than declared is refused
+      if (en.method === 14) { // zip-lzma: version(2) propsSize(2) props(5) stream
+        const ps = data.readUInt16LE(2);
+        return decompressRaw(data.subarray(4, 4 + ps), en.usize, data, 4 + ps);
+      }
+      throw new Error(`unsupported method ${en.method}`);
+    } catch { this.damaged.add(en.name); return null; }
   }
 }
 

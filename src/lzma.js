@@ -6,6 +6,8 @@ const fs = require('fs');
 
 const PROB_INIT = 1024;
 const TOP = 16777216; // 1 << 24
+// Whole-buffer decompression (BSP lumps, pakfile entries) never yields more than this. Streaming readers (workshop addons) are not limited.
+const MAX_OUTPUT = 1 << 29;
 
 class LzmaError extends Error {}
 class LzmaNeedInput extends LzmaError {
@@ -249,6 +251,7 @@ function decompressAlone(buf) {
 
 /** Decompress raw LZMA data given its 5 property bytes and the uncompressed size. */
 function decompressRaw(props, unpackSize, buf, start = 0) {
+  if (unpackSize > MAX_OUTPUT) throw new LzmaError('LZMA: declared size too large'); // before the window is allocated
   return drain(new LzmaDecoder(props, unpackSize, new Input({ buf, start })));
 }
 
@@ -258,6 +261,7 @@ function drain(dec) {
   let pos = 0;
   while (!dec.finished) {
     dec.decodeTo(pos + step);
+    if (dec.total > MAX_OUTPUT) throw new LzmaError('LZMA: output too large'); // LZMA squeezes zeros ~7000:1: size is never trusted
     if (dec.total > pos) { parts.push(dec.getRange(pos, dec.total - pos)); pos = dec.total; } else if (!dec.finished) break;
   }
   return Buffer.concat(parts);

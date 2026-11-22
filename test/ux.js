@@ -202,6 +202,160 @@ const solid = (id, materials) => `\tsolid\n\t{\n\t\t"id" "${id}"\n${materials.ma
     assert.throws(() => vtf.decode(v, vtf.parse(v)), /unreasonable texture size/);
   });
 
+  await test('a damaged or lying pakfile entry is reported and skipped, never fatal nor memory-hungry', async () => {
+    const zlib = require('zlib');
+    const { Pak } = require('../src/bsp');
+    const { decompressRaw } = require('../src/lzma');
+    const entry = (data, method, usize) => { // a one-entry pakfile whose directory announces this method and size
+      const z = F.makeZip({ 'a/b.txt': data });
+      z.writeUInt16LE(method, 8);
+      const c = z.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+      z.writeUInt16LE(method, c + 10); z.writeUInt32LE(usize, c + 24);
+      return new Pak(z);
+    };
+    const text = Buffer.from('hello pakfile '.repeat(50));
+    assert.deepStrictEqual(entry(zlib.deflateRawSync(text), 8, text.length).read('a/b.txt'), text, 'an honest deflate entry still reads');
+    for (const [label, pak] of [
+      ['stream longer than declared', entry(zlib.deflateRawSync(Buffer.alloc(4 << 20)), 8, 1000)],
+      ['4 GiB declared', entry(zlib.deflateRawSync(text), 8, 0xffffffff)],
+      ['not a deflate stream', entry(Buffer.from('not deflate at all'), 8, 18)],
+      ['unknown method', entry(text, 99, text.length)],
+    ]) { assert.strictEqual(pak.read('a/b.txt'), null, label); assert.ok(pak.damaged.has('a/b.txt'), label); }
+    assert.throws(() => decompressRaw(Buffer.from([0x5d, 0, 0, 0, 1]), 0xffffffff, Buffer.alloc(32)), /too large/, 'LZMA size is never trusted');
+
+    // end to end: one damaged entry used to abort the whole analysis ("invalid stored block lengths")
+    const bsp = F.makeBSP({ entities: [{ classname: 'worldspawn' }], pak: { 'particles/particles_manifest.txt': 'particles_manifest\n{\n}\n' } });
+    bsp.writeUInt16LE(8, bsp.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04])) + 8);
+    bsp.writeUInt16LE(8, bsp.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02])) + 10);
+    const file = put(root, 'src/damaged.bsp', bsp);
+    const r = await new Scraper({ gamepath: game, bsp: file, outputDir: path.join(root, 'damaged_out'), cacheDir, dryRun: true, workshop: false }).run();
+    assert.ok(r.warnings.some((w) => /damaged/.test(w) && w.includes('particles/particles_manifest.txt')), JSON.stringify(r.warnings));
+  });
+  await test('names printed from the map carry no terminal escape sequences (soundscapes, effects, instance files)', async () => {
+    const ESC = String.fromCharCode(27);
+    const file = put(root, 'src/esc2.vmf', [
+      block('entity', { id: '1', classname: 'env_soundscape', soundscape: `evil${ESC}[2Jscape` }),
+      block('entity', { id: '2', classname: 'info_particle_system', effect_name: `fx${ESC}]0;pwn` }),
+      block('entity', { id: '3', classname: 'func_instance', file: `inst${ESC}[31m.vmf` }),
+    ].join(''));
+    const r = await new Scraper({ gamepath: game, vmf: file, outputDir: path.join(root, 'esc2_out'), cacheDir, dryRun: true, workshop: false }).run();
+    const dump = JSON.stringify(r) + textReport(r, { t: makeT('en'), fmt: ui.makeFmt('en'), version: '0' });
+    assert.ok(!dump.includes(ESC) && !dump.includes('\\u001b'), 'no escape character reaches the output');
+    assert.deepStrictEqual([r.unresolved.soundscapes.length, r.unresolved.effects.length, r.warnings.length > 0], [1, 1, true], 'the names themselves are still reported');
+  });
+  await test('a megabyte of path characters cannot freeze the asset scan (it used to be quadratic)', () => {
+    const s = new Scraper({ gamepath: game, vmf: vmfFile, outputDir: path.join(root, 'redos_out'), cacheDir });
+    const t0 = Date.now();
+    s.scanText('a'.repeat(100000));              // ~10 s with an unbounded "+"
+    s.scanText(`${'a/'.repeat(50000)}b`);
+    assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
+    s.scanText('see models/props/x.mdl and sound/a.wav');
+    assert.ok(s.models.has('models/props/x.mdl') && s.waves.has('a.wav'), 'real paths are still found');
+  });
+  await test('Windows programs are started by absolute path (a planted reg.exe / explorer.exe in the map folder is never run)', () => {
+    const win = shell.systemPath('System32', 'reg.exe');
+    assert.ok(path.isAbsolute(win) && /[\\/]System32[\\/]reg\.exe$/i.test(win));
+    for (const f of ['winshell.js', 'steam.js', 'ui.js', 'scraper.js']) {
+      const code = fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf-8');
+      assert.ok(!/spawn(?:Sync)?\(\s*['"](?:reg|explorer)(?:\.exe)?['"]/.test(code), `${f} starts a bare command name`);
+    }
+    if (!shell.supported()) return;
+    const plant = path.join(root, 'planted');
+    fs.mkdirSync(plant, { recursive: true });
+    fs.copyFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'hostname.exe'), path.join(plant, 'reg.exe'));
+    const here = process.cwd();
+    try {
+      process.chdir(plant);                      // the folder Explorer starts us in when a .vmf is right-clicked
+      const r = shell.reg(['/?']);
+      assert.ok(r.ok && /QUERY/.test(r.out), 'the real reg.exe answered, not the planted one');
+    } finally { process.chdir(here); }
+  });
+  await test('a negative offset in a model header reads as empty instead of throwing', () => {
+    const { parseMDL } = require('../src/mdl');
+    for (const [countAt, indexAt] of [[204, 208], [212, 216], [232, 236]]) {
+      const b = Buffer.from(F.makeMDL({ textures: ['a'], cdtextures: ['x/'] }));
+      b.writeInt32LE(1, countAt); b.writeInt32LE(-1000, indexAt);
+      assert.doesNotThrow(() => parseMDL(b), `offset at ${indexAt}`);
+    }
+  });
+  await test('a .gma is written under a temporary name: an interrupted run never leaves a truncated archive', async () => {
+    const { writeGMA } = require('../src/publish');
+    const dir = path.join(root, 'gma_atomic');
+    const src = put(dir, 'in/materials/a.vtf', Buffer.alloc(100, 1));
+    const out = path.join(dir, 'ok.gma');
+    await writeGMA({ out, title: 't', tags: ['fun'], files: [{ rel: 'materials/a.vtf', abs: src, size: 100 }] });
+    assert.deepStrictEqual(fs.readdirSync(dir).filter((n) => n.endsWith('.gma') || n.endsWith('.mstmp')), ['ok.gma']);
+    assert.strictEqual(fs.readFileSync(out).toString('latin1', 0, 4), 'GMAD');
+    const bad = path.join(dir, 'bad.gma');
+    await assert.rejects(() => writeGMA({
+      out: bad, title: 't', tags: ['fun'], files: [{ rel: 'materials/a.vtf', abs: src, size: 100 }],
+      onProgress: () => fs.truncateSync(src, 10), // the file shrinks after its checksum was taken
+    }), /changed while packing/);
+    assert.ok(!fs.existsSync(bad) && !fs.existsSync(`${bad}.mstmp`), 'neither a .gma nor a leftover');
+  });
+  await test('looking a file up never lists a folder that does not exist (100+ addons made it ~100k failing readdir calls)', async () => {
+    const pg = path.join(root, 'perf', 'garrysmod');
+    for (let i = 0; i < 25; i++) put(pg, `addons/a${i}/materials/only${i}/x.txt`, '');
+    const names = [];
+    for (let i = 0; i < 30; i++) { put(pg, `materials/deep${i % 3}/m${i}.vmt`, '"LightmappedGeneric"\n{\n}\n'); names.push(`deep${i % 3}/m${i}`); }
+    const vmf = put(root, 'src/perf.vmf', block('world', { id: '1', classname: 'worldspawn' }, solid(2, names)));
+    const real = fs.readdirSync;
+    let failing = 0;
+    fs.readdirSync = function (p, ...rest) { try { return real.call(this, p, ...rest); } catch (e) { if (/[\\/]materials[\\/]/.test(String(p))) failing++; throw e; } };
+    let r;
+    try { r = await new Scraper({ gamepath: pg, vmf, outputDir: path.join(root, 'perf_out'), cacheDir, dryRun: true, workshop: false }).run(); } finally { fs.readdirSync = real; }
+    assert.strictEqual(r.stats.materials, 30, 'every material is still found');
+    assert.strictEqual(failing, 0, `${failing} failing listings of folders under materials/`);
+  });
+  await test('folders reached through a junction / symlink are still searched, whatever the case of their names', () => {
+    const pg = path.join(root, 'perf', 'garrysmod'), target = path.join(root, 'linked_target');
+    put(target, 'Tex/x.vmt', '"x"\n{\n}\n');
+    const link = path.join(pg, 'addons', 'a3', 'materials', 'wall');
+    try { fs.symlinkSync(target, link, 'junction'); } catch { return; } // no permission to link on this machine
+    const s = new Scraper({ gamepath: pg, vmf: vmfFile, outputDir: path.join(root, 'link_out'), cacheDir });
+    s.initSearchPaths();
+    const found = s.resolve('materials/wall/tex/x.vmt');
+    assert.ok(found && path.basename(found) === 'x.vmt', String(found));
+    assert.strictEqual(s.resolve('materials/wall/tex/nope.vmt'), null);
+    assert.strictEqual(s.resolve('materials/wall/x.vmt/y'), null, 'a file is not a folder');
+  });
+
+  await test('prefetch opens every file a few at a time and ignores the ones it cannot open', async () => {
+    const { prefetch } = require('../src/prefetch');
+    const dir = path.join(root, 'prefetch');
+    const files = [1, 2, 3, 4, 5].map((i) => put(dir, `f${i}.bin`, 'x'));
+    files.push(path.join(dir, 'missing.bin'));
+    const real = fs.promises.open;
+    let calls = 0, running = 0, peak = 0;
+    fs.promises.open = async function (f, ...rest) {
+      calls++; running++; peak = Math.max(peak, running);
+      try { await new Promise((r) => setImmediate(r)); return await real.call(fs.promises, f, ...rest); } finally { running--; }
+    };
+    try { await prefetch(files, 2); } finally { fs.promises.open = real; }
+    assert.deepStrictEqual([calls, peak], [6, 2]);
+    await prefetch([]); // nothing to do is fine
+  });
+  await test('hand-edited config values and hostile icons cannot crash or stall the start', () => {
+    const { cleanTags, readJpegSize } = require('../src/publish');
+    assert.deepStrictEqual(cleanTags('fun'), ['roleplay'], 'a string instead of a list');
+    assert.doesNotThrow(() => cli.resolveSettings(cli.parseArgs([]), { defaults: { tags: 'fun', excludeWorkshop: 'all' } }));
+    const tiny = Buffer.concat([Buffer.from([0xFF, 0xD8]), ...Array.from({ length: 20000 }, () => Buffer.from([0xFF, 0xE0, 0x00, 0x02]))]);
+    const file = put(root, 'icons/endless.jpg', tiny);
+    const real = fs.readSync;
+    let reads = 0;
+    fs.readSync = (...a) => { reads++; return real(...a); };
+    try { assert.strictEqual(readJpegSize(file), null); } finally { fs.readSync = real; }
+    assert.ok(reads <= 4200, `${reads} reads`);
+  });
+  await test('--json creates the folder of its file: a long run never loses its result', () => {
+    const target = path.join(root, 'json_out', 'deep', 'result.json');
+    const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'main.js'), vmfFile, '--dry-run', '--json', target, '--game', game, '--no-wait', '--no-open'], {
+      cwd: root, input: '', encoding: 'utf-8', env: { ...process.env, MAPSCRAPER_CONFIG: path.join(root, 'cfg_json', 'config.json'), MAPSCRAPER_OFFLINE: '1', LOCALAPPDATA: cacheDir, FORCE_COLOR: '0' },
+    });
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.strictEqual(JSON.parse(fs.readFileSync(target, 'utf-8')).mapname, 'uxmap');
+  });
+
   console.log('reports');
   await test('text and HTML reports (both languages, escaping, working script)', () => {
     for (const lang of ['en', 'fr']) {

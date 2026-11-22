@@ -24,7 +24,9 @@ const OUTPUT_ENTRIES = new Set([...CONTENT_DIRS, 'addon.json', 'detail.vbsp', 'z
 const SKY_SIDES = ['up', 'dn', 'lf', 'rt', 'ft', 'bk'];
 const BUMP_KEYS = new Set(['bumpmap', 'bumpmap2', 'normalmap', 'normalmap2', 'ssbump', 'bumpmask']);
 const ASSET_EXT = /\.(mdl|vmt|vtf|wav|mp3|ogg|pcf)$/i;
-const ASSET_IN_TEXT = /[\w\/\\.\-]+\.(?:mdl|vmt|vtf|wav|mp3|ogg|pcf)\b/gi;
+// The run is bounded ({1,260}, Windows MAX_PATH): with a bare "+", a megabyte of path characters without an extension
+// costs a quadratic time (80 KB already took 6 s), which a hostile "code" value or script could use to freeze the tool.
+const ASSET_IN_TEXT = /[\w\/\\.\-]{1,260}\.(?:mdl|vmt|vtf|wav|mp3|ogg|pcf)\b/gi;
 const STATE_VERSION = 1;
 // The engine strips whatever extension a VMT gives to a texture name, then looks for the .vtf
 const TEXTURE_EXTS = ['.vtf', '.vmt', '.tga', '.psd', '.png', '.jpg', '.jpeg', '.bmp'];
@@ -229,8 +231,9 @@ class Scraper {
     if (key) this.status(this._phase);
   }
 
-  warn(key, vars) { this.warnings.push(this.t(key, vars)); }
-  note(key, vars) { const msg = this.t(key, vars); if (!this.notes.includes(msg)) this.notes.push(msg); }
+  // Every message goes through clean(): some variables are raw text from the map (an instance file name, ...).
+  warn(key, vars) { this.warnings.push(clean(this.t(key, vars))); }
+  note(key, vars) { const msg = clean(this.t(key, vars)); if (!this.notes.includes(msg)) this.notes.push(msg); }
   async tick() { if ((++this._ops & 63) === 0) await new Promise((r) => setImmediate(r)); }
 
   /** Remember what first referenced a file (or a soundscape / soundscript / particle name). */
@@ -315,14 +318,20 @@ class Scraper {
     if (cached !== undefined) return cached;
     let found = null;
     if (!isSafeRel(key)) { this.unsafe.add(key); this.resolveCache.set(key, null); return null; } // "../" tricks: never leave the search paths
+    const segs = key.split('/'), last = segs.pop();
     for (const sp of this.searchPaths) {
-      const p = path.join(sp, key);
-      if (!inside(sp, p)) continue;
-      // one directory listing answers every lookup in that folder: half of all lookups are for files that do not exist
-      const names = this.listDir(path.dirname(p));
-      const real = names && names.get(path.basename(p).toLowerCase());
-      if (!real) continue;
-      const full = path.join(path.dirname(p), real);
+      // Walk down one cached listing per level: a search path (100+ addons) that lacks a folder costs nothing, instead of one
+      // failing readdir (an exception each) per lookup. Names are matched case-insensitively and keep their real spelling.
+      let dir = sp, list = this.listDir(sp);
+      for (const seg of segs) {
+        const hit = list.get(seg);
+        if (!hit || !hit.dir) { list = null; break; }
+        if (!hit.list) { hit.full = path.join(dir, hit.name); hit.list = this.listDir(hit.full); } // memoised on the entry: no join / lowercase per lookup
+        dir = hit.full; list = hit.list;
+      }
+      const hit = list && list.get(last);
+      if (!hit || hit.dir) continue;
+      const full = path.join(dir, hit.name);
       const st = fs.statSync(full, { throwIfNoEntry: false });
       if (st && st.isFile()) { found = full; this.statCache.set(full, st); break; } // keep the stat: copy() needs size + mtime
     }
@@ -334,15 +343,19 @@ class Scraper {
     return found;
   }
 
-  /** Lower-cased file names of a folder -> real names (null when the folder does not exist). Cached for the whole run. */
+  /** Lower-cased entry name -> { name: real name, dir } for one folder (empty when it is missing). Cached for the whole run. */
   listDir(dir) {
     const k = dir.toLowerCase();
     let names = this.dirCache.get(k);
     if (names === undefined) {
+      names = new Map();
       try {
-        names = new Map();
-        for (const e of fs.readdirSync(dir, { withFileTypes: true })) if (!e.isDirectory()) names.set(e.name.toLowerCase(), e.name);
-      } catch { names = null; }
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          // a link (junction / symlink) to a folder counts as a folder, like when the OS follows it
+          const isLink = e.isSymbolicLink();
+          names.set(e.name.toLowerCase(), { name: e.name, dir: e.isDirectory() || (isLink && isDir(path.join(dir, e.name))) });
+        }
+      } catch { /* the folder does not exist or cannot be read */ }
       this.dirCache.set(k, names);
     }
     return names;
@@ -763,7 +776,7 @@ class Scraper {
 
   addSoundscape(v) {
     if (!this.extract.sounds) return;
-    const s = v.trim().toLowerCase();
+    const s = clean(v).trim().toLowerCase(); // printed in the console and the reports: no terminal escape sequences
     if (!s) return;
     this.ref(`soundscape:${s}`);
     this.soundscapes.add(s);
@@ -860,7 +873,7 @@ class Scraper {
 
   addEffect(v) {
     if (!this.extract.others) return;
-    const n = v.trim().toLowerCase();
+    const n = clean(v).trim().toLowerCase();
     if (!n) return;
     this.ref(`effect:${n}`);
     this.effects.add(n);
@@ -932,7 +945,7 @@ class Scraper {
       const parsed = wanted ? parsePCF(raw) : null;
       const text = parsed ? stringsOf(parsed, wanted).join('\n') : raw.toString('latin1');
       if (parsed) this.stats.pcfSystems += wanted.size;
-      const re = /[\w\/\\.\-]+\.(vmt|mdl)/gi;
+      const re = /[\w\/\\.\-]{1,260}\.(vmt|mdl)/gi; // bounded, see ASSET_IN_TEXT
       let m;
       this.curRef = pcf;
       while ((m = re.exec(text))) {
@@ -1279,6 +1292,7 @@ class Scraper {
       for (const [f, optional] of this.files) this.copy(f, { optional });
       if (this.extract.others) { this.curRef = { kind: 'map' }; this.processMapFiles(); this.curRef = null; this.planBSP(); }
       if (this.unsafe.size) this.warn('warn.unsafePaths', { count: this.unsafe.size, files: [...this.unsafe].slice(0, 5).join(', ') });
+      if (this.pak && this.pak.damaged.size) this.warn('warn.pakDamaged', { count: this.pak.damaged.size, files: [...this.pak.damaged].slice(0, 5).join(', ') });
       this.finalizePlan(fmt);
       if (this.workshop) this.workshopErrors = this.workshop.errors.slice();
     } finally {

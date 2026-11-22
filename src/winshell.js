@@ -8,8 +8,14 @@ const BASE = 'HKCU\\Software\\Classes\\SystemFileAssociations';
 const EXTENSIONS = ['.vmf', '.bsp'];
 const ENTRY = 'MapScraper';
 
+/**
+ * Absolute path inside the Windows folder. A bare "reg" or "explorer.exe" is looked up in the current folder first, which
+ * is the folder of the map when Explorer starts us: an archive downloaded next to a .vmf could plant its own reg.exe there.
+ */
+function systemPath(...parts) { return path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', ...parts); }
+
 function reg(args) {
-  const r = spawnSync('reg', args, { encoding: 'utf-8', windowsHide: true, timeout: 10000 });
+  const r = spawnSync(systemPath('System32', 'reg.exe'), args, { encoding: 'utf-8', windowsHide: true, timeout: 10000 });
   return { ok: r.status === 0, out: `${r.stdout || ''}${r.stderr || ''}`.trim() };
 }
 
@@ -49,4 +55,4 @@ function installedCommand({ base = BASE } = {}) {
   return m ? m[1] : null;
 }
 
-module.exports = { install, uninstall, installedCommand, launchCommand, supported, BASE };
+module.exports = { install, uninstall, installedCommand, launchCommand, supported, reg, systemPath, BASE };

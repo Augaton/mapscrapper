@@ -36,7 +36,11 @@ English or French depending on Windows (`--lang en|fr`), and the game folder is 
 ```
 
 The map list holds the maps you used last, then the most recent VMFs of the same folders. Before anything is
-written the tool tells you how much it is going to copy (and asks above 1 GB), and checks the free disk space.
+written the tool tells you how much it is going to copy and **where** (and asks above 1 GB), and checks the free disk
+space. After an analysis it offers to extract the map right away.
+
+The publication questions (title, description, tags, a 512x512 `.jpg` icon) are remembered per map in `config.json`:
+the next publication of the same map is Enter four times. `-` empties the description or the icon.
 
 Scripts and power users: give any option and no question is asked. Values can be written `--out dir` or `--out=dir`; an
 unknown option is an error, so a typo never runs a different job than the one asked for.
@@ -47,8 +51,10 @@ mapscraper --bsp "C:\...\garrysmod\maps\gm_mymap.bsp" --dry-run
 mapscraper "C:\maps\gm_mymap.vmf" --watch          (re-extracts after every compile, Ctrl+C to stop)
 ```
 
-Output goes to `./<mapname>/` next to the executable. The output folder must be dedicated to MapScraper: it is
-cleared on every run (the tool refuses to clear a folder that contains anything it did not create).
+Output goes to `./<mapname>/`, relative to the **current folder** of the program (the exact path is printed before
+anything is written; `--out` chooses another one). The output folder must be dedicated to MapScraper: it is
+cleared on every run (the tool refuses to clear a folder that contains anything it did not create), so keep the
+workshop icon and other files of yours outside of it.
 
 ### Reports
 
@@ -85,23 +91,44 @@ then *View > Go to Coordinates* in Hammer) or to the brush id, so a broken refer
 | `--threads <n>` | worker threads of the texture optimiser (default: CPU count − 1, max 8) |
 | `--compress-bsp` | LZMA-compress the BSP (typically −75 %). Needs `bspzipplusplus.exe` in `GarrysMod/bin[/win64]`; load the map once in game before publishing |
 | `--gma`, `--split-mb <n>`, `--title`, `--tags a,b` | build `<output>.gma` (or `_part1.gma`, `_part2.gma`… of at most *n* MB) |
+| `--description <text>`, `--icon <file>` | description written in `addon.json` and the `.gma`; icon (a 512x512 JPEG, checked at start) used in the `gmpublish` command printed at the end |
+| `--strict` | exit code **2** when files are missing or a warning was raised (0 = fine, 1 = the run failed) |
+| `--json <file>` | write the full result of the run (stats, missing files and who uses them, workshop items, warnings…) as JSON |
 | `--lang en\|fr`, `--no-open`, `--yes` | language · do not open the visual report · do not ask before big copies |
+| `--no-check-updates` | do not look for a new version at start (see below) |
 | `--install-context-menu` / `--uninstall-context-menu` | "Extract with MapScraper" on right-click on `.vmf` / `.bsp` files (per-user registry keys, also in Settings) |
 | `--save-defaults` | remember the current options as defaults |
 | `--optimize <folder>` | only run the texture optimiser on an existing folder |
 | `--no-wait` | do not wait for Enter at the end |
 
 Every on/off option has a `--no-<option>` form. Defaults live in `%APPDATA%\MapScraper\config.json` (the Settings
-menu edits the common ones):
+menu edits every one of them):
 
 ```json
 {
   "gamepath": "D:\\Steam\\steamapps\\common\\GarrysMod\\garrysmod",
   "lang": "fr",
   "defaults": { "optimizeTextures": true, "maxTexture": 2048, "keepNormals": true, "compressBsp": true,
-                "incremental": true, "excludeWorkshop": ["3556917354"], "gma": false, "tags": ["roleplay"], "openReport": true }
+                "incremental": true, "excludeWorkshop": ["3556917354"], "gma": false, "tags": ["roleplay"], "openReport": true,
+                "checkUpdates": true }
 }
 ```
+
+### Environment, network, exit codes
+
+| | |
+|---|---|
+| `MAPSCRAPER_CONFIG` | path of the config file (default `%APPDATA%\MapScraper\config.json`) |
+| `MAPSCRAPER_LANG` | language when neither `--lang` nor the config sets one (`en` / `fr`) |
+| `MAPSCRAPER_OFFLINE=1` | never touch the network |
+| `DEBUG=1` | print the full stack trace of an error |
+
+The only network access is the update check: at start, one `GET` of `package.json` on `raw.githubusercontent.com`
+(3 s timeout, in the background); only the version number in the answer is read and compared, and the request
+carries no map name nor identifier (GitHub sees your IP address, as for any download). Turn it off with `--no-check-updates`, the Settings menu (`checkUpdates`) or `MAPSCRAPER_OFFLINE=1`.
+
+Exit codes: **0** done, **1** error (bad argument, unreadable map, full disk…), **2** `--strict` and files were missing or a warning was raised.
+In `--watch`, each cycle prints only what *changed*: the files that just became missing (with who uses them) and the ones found again.
 
 ## What is detected
 
@@ -146,7 +173,8 @@ Installed workshop addons (`steamapps/workshop/content/4000`, raw `.gma` and LZM
   are **embedded in the BSP** by a built-in pakfile writer — no `bspzip` needed (Garry's Mod's own `bspzip` currently
   bloats BSPs by tens of MB).
 - `addon.json` is written in the output folder; `--gma` builds the archive(s) natively (whitelist enforced, map
-  first, optional splitting). Publish with `gmpublish.exe create -icon icon.jpg -addon <file.gma>`.
+  first, optional splitting). Publish with `gmpublish.exe create -icon icon.jpg -addon <file.gma>`: the command is
+  printed at the end, with the path of your `--icon` when you gave one.
 - All output paths are lowercased so the addon works on Linux servers.
 
 ## Shrinking the addon

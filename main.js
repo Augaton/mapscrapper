@@ -8,7 +8,7 @@ const path = require('path');
 const figlet = require('figlet');
 const { Scraper, describeChain } = require('./src/scraper');
 const { optimizeTextures } = require('./src/optimize');
-const { buildGMAs, writeAddonJson, cleanTags, VALID_TAGS } = require('./src/publish');
+const { buildGMAs, writeAddonJson, cleanTags, readJpegSize, VALID_TAGS } = require('./src/publish');
 const { writeReports } = require('./src/report');
 const { makeT, detectLang, LANGS } = require('./src/i18n');
 const { detectGamePath } = require('./src/steam');
@@ -27,16 +27,16 @@ const DEFAULTS = {
   optimizeTextures: false, maxTexture: 2048, keepNormals: false, threads: 0,
   incremental: false, allSkins: false, compressBsp: false,
   workshop: true, fromWorkshop: false, excludeWorkshop: [],
-  gma: false, splitMb: 0, tags: ['roleplay'], openReport: true,
+  gma: false, splitMb: 0, tags: ['roleplay'], openReport: true, checkUpdates: true,
 };
 const FLAG_OF = {
   optimizeTextures: 'optimize-textures', keepNormals: 'keep-normals', incremental: 'incremental', allSkins: 'all-skins', compressBsp: 'compress-bsp',
-  workshop: 'workshop', fromWorkshop: 'from-workshop', gma: 'gma', openReport: 'open',
+  workshop: 'workshop', fromWorkshop: 'from-workshop', gma: 'gma', openReport: 'open', checkUpdates: 'check-updates',
 };
-const VALUE_OPTS = ['game', 'vmf', 'bsp', 'out', 'max-texture', 'optimize', 'threads', 'exclude-workshop', 'split-mb', 'title', 'tags', 'lang'];
+const VALUE_OPTS = ['game', 'vmf', 'bsp', 'out', 'max-texture', 'optimize', 'threads', 'exclude-workshop', 'split-mb', 'title', 'description', 'icon', 'json', 'tags', 'lang'];
 // Every other --flag is refused: a typo (--dryrun, --optimise-textures) must never run a different job than asked.
 const BOOL_FLAGS = new Set([
-  'help', 'h', 'all', 'materials', 'models', 'sounds', 'publish', 'dry-run', 'watch', 'yes', 'no-wait', 'save-defaults',
+  'help', 'h', 'all', 'materials', 'models', 'sounds', 'publish', 'dry-run', 'watch', 'strict', 'yes', 'no-wait', 'save-defaults',
   'install-context-menu', 'uninstall-context-menu',
   ...Object.values(FLAG_OF).flatMap((f) => [f, `no-${f}`]),
 ]);
@@ -149,6 +149,24 @@ function rememberMap(cfg, file) {
   cfg.recent = [abs, ...(Array.isArray(cfg.recent) ? cfg.recent : []).filter((f) => path.resolve(f).toLowerCase() !== abs.toLowerCase())].slice(0, 10);
 }
 
+const mapKey = (file) => path.basename(file, path.extname(file)).toLowerCase();
+
+/** What changed in the list of missing files between two runs of a watched map. */
+function diffMissing(before, after) {
+  const was = new Set(before), is = new Set(after);
+  return { added: [...is].filter((f) => !was.has(f)), fixed: [...was].filter((f) => !is.has(f)) };
+}
+
+/** Problem with a workshop icon file: { fatal, msg } or null. A wrong size only warns (the workshop may still take it). */
+function checkIcon(file, t) {
+  const st = fs.statSync(file, { throwIfNoEntry: false });
+  if (!st || !st.isFile()) return { fatal: true, msg: t('icon.missing', { file }) };
+  const size = readJpegSize(file);
+  if (!size) return { fatal: true, msg: t('icon.notJpeg', { file }) };
+  if (size.width !== 512 || size.height !== 512) return { fatal: false, msg: t('icon.badSize', { file, w: size.width, h: size.height }) };
+  return null;
+}
+
 // ---------- output ----------
 
 function usage(t) {
@@ -247,13 +265,13 @@ async function runOptimize(dir, s, normalMaps, ctx) {
   return res;
 }
 
-async function runGma(result, s, title, gamepath, ctx) {
+async function runGma(result, s, { title, description, icon }, gamepath, ctx) {
   const { t, fmt } = ctx;
   const status = ui.createStatus(t, fmt);
   let res;
   try {
     res = await buildGMAs({
-      dir: result.outputDir, outBase: result.outputDir, title, tags: s.tags, splitBytes: s.splitMb * 1048576,
+      dir: result.outputDir, outBase: result.outputDir, title, description, tags: s.tags, splitBytes: s.splitMb * 1048576,
       onProgress: (part, parts, done, total) => status.phase(t('gma.progress', { part: parts > 1 ? `${part}/${parts} ` : '', percent: total ? Math.round((done / total) * 100) : 100 }), true),
     });
   } finally { status.stop(); }
@@ -261,7 +279,7 @@ async function runGma(result, s, title, gamepath, ctx) {
   for (const a of res.archives) console.log(`  ${white(a.file)} ${gray(`(${fmt.bytes(a.size)}, ${a.count} ${t('sum.filesWord')})`)}`);
   const gmpublish = path.join(path.dirname(gamepath), 'bin', 'gmpublish.exe');
   console.log(gray(`  ${t('gma.publish')}`));
-  for (const a of res.archives) console.log(gray(`   "${gmpublish}" create -icon "icon.jpg" -addon "${a.file}"`));
+  for (const a of res.archives) console.log(gray(`   "${gmpublish}" create -icon "${icon || 'icon.jpg'}" -addon "${a.file}"`));
   return res;
 }
 
@@ -285,6 +303,7 @@ async function runMap(job, ctx) {
   } finally { status.stop(); }
   if (!s.dryRun && !quiet) {
     console.log(`\n${white(t('plan.summary', { files: plan.writeFiles, size: fmt.bytes(plan.writeBytes), kept: plan.keptFiles, free: fmt.bytes(plan.free) }))}`);
+    console.log(gray(`   ${t('plan.dir', { dir: scraper.outputDir })}`));
     if (job.confirm && plan.writeBytes >= GIB && !(await ui.askYN(t('ask.continue'), true, t))) { console.log(gray(t('plan.cancelled'))); return null; }
   }
   status = ui.createStatus(t, fmt);
@@ -298,8 +317,8 @@ async function runMap(job, ctx) {
       optRes = quiet ? await optimizeTextures(result.outputDir, o) : await runOptimize(result.outputDir, s, result.normalMaps, ctx);
     }
     const title = job.title || result.mapname;
-    if (extract.others) writeAddonJson(result.outputDir, { title, tags: s.tags, ignore: result.notGmaAllowed });
-    if (s.gma) gmaRes = await runGma(result, s, title, gamepath, ctx);
+    if (extract.others) writeAddonJson(result.outputDir, { title, description: job.description, tags: s.tags, ignore: result.notGmaAllowed });
+    if (s.gma) gmaRes = await runGma(result, s, { title, description: job.description, icon: job.icon }, gamepath, ctx);
   }
   result.reports = writeReports(result, { optRes, gmaRes, t, fmt, version });
   return result;
@@ -314,10 +333,17 @@ function watchMap(job, first, ctx) {
   console.log(`\n${white(t('watch.start', { files: files.map((f) => path.basename(f)).join(' + ') }))}`);
   const now = () => new Date().toLocaleTimeString(t.lang);
   ui.closePrompts();
+  let known = first ? first.missing : []; // what the previous cycle could not find: only the difference is worth a line
+  const list = (r, names) => { for (const m of names.slice(0, 5)) { const chain = describeChain(r.missingRefs[m] || [], t); console.log(`   ${gray('-')} ${white(m)}${chain ? gray(`   ${t('sum.usedBy')} ${chain}`) : ''}`); } if (names.length > 5) console.log(gray(`   … +${names.length - 5}`)); };
   return new Promise(() => {
     watchFiles(files, async () => {
       const r = await runMap({ ...job, quiet: true, confirm: false }, ctx);
-      if (r) console.log(`${gray(`[${now()}]`)} ${t('watch.line', { written: r.stats.written, stale: r.stats.stale, size: fmt.bytes(r.bytes.total), time: fmt.duration(r.ms) })}${r.missing.length ? yellow(`  ⚠️ ${r.missing.length}`) : ''}`);
+      if (!r) return;
+      console.log(`${gray(`[${now()}]`)} ${t('watch.line', { written: r.stats.written, stale: r.stats.stale, size: fmt.bytes(r.bytes.total), time: fmt.duration(r.ms) })}${r.missing.length ? yellow(`  ⚠️ ${r.missing.length}`) : ''}`);
+      const { added, fixed } = diffMissing(known, r.missing);
+      known = r.missing;
+      if (added.length) { console.log(yellow(`   ${t('watch.newMissing', { n: added.length })}`)); list(r, added); }
+      if (fixed.length) { console.log(green(`   ${t('watch.fixed', { n: fixed.length })}`)); for (const m of fixed.slice(0, 5)) console.log(gray(`   - ${m}`)); if (fixed.length > 5) console.log(gray(`   … +${fixed.length - 5}`)); }
     }, {
       settle: job.settle,
       onDetect: () => console.log(`${gray(`[${now()}]`)} ${gray(t('watch.changed'))}`),
@@ -372,6 +398,35 @@ async function customOptions(s, ctx) {
   return { s: out, extract };
 }
 
+/**
+ * Workshop details of a map that is about to become a .gma: title, description, tags, icon.
+ * Remembered per map in config.json ("publish"), so the next publication is Enter four times.
+ * @returns {{title:string, description:string, icon:string, tags:string[]}}
+ */
+async function askPublishInfo(job, ctx) {
+  const { t, cfg } = ctx;
+  const key = mapKey(job.vmf || job.bsp);
+  const known = (cfg.publish && cfg.publish[key]) || {};
+  const none = (v) => (v === '-' ? '' : v);
+  const title = await ui.askDefault(t('pub.title'), known.title || key, t);
+  const description = none(await ui.askDefault(t('pub.description'), known.description || '', t));
+  const tags = cleanTags((await ui.askDefault(t('pub.tags', { valid: VALID_TAGS.join(', ') }), job.s.tags.join(','), t)).split(/[,; ]+/));
+  console.log(gray(`   ${tags.join(', ')}`));
+  const offered = known.icon && !(checkIcon(known.icon, t) || {}).fatal ? known.icon : ''; // a vanished icon is not proposed again
+  let icon = '';
+  for (;;) {
+    icon = none(ui.unquote(await ui.askDefault(t('pub.icon'), offered, t)));
+    const problem = icon ? checkIcon(path.resolve(icon), t) : null;
+    if (problem) console.log(problem.fatal ? red(`  ${problem.msg}`) : yellow(`  ${problem.msg}`));
+    if (!problem || !problem.fatal) break;
+  }
+  if (icon) icon = path.resolve(icon);
+  cfg.publish = { ...cfg.publish, [key]: { title, description, icon } };
+  cfg.defaults = { ...DEFAULTS, ...(cfg.defaults || {}), tags };
+  saveConfig(cfg);
+  return { title, description, icon, tags };
+}
+
 function toggleContextMenu(install, ctx) {
   const { t } = ctx;
   if (!shell.supported()) { console.log(yellow(t('shell.windowsOnly'))); return false; }
@@ -388,21 +443,34 @@ async function settingsMenu(ctx) {
     const d = { ...DEFAULTS, ...(cfg.defaults || {}) };
     const yn = (v) => (v ? t('cli.yes') : t('cli.no'));
     const installed = shell.supported() ? !!shell.installedCommand() : false;
-    const options = [
-      { label: `${t('settings.lang')} : ${t.lang === 'fr' ? 'Français' : 'English'}`, value: 'lang' },
-      { label: `${t('settings.optimize')} : ${yn(d.optimizeTextures)}`, value: 'optimizeTextures' },
-      { label: `${t('settings.keepNormals')} : ${yn(d.keepNormals)}`, value: 'keepNormals' },
-      { label: `${t('settings.maxTexture')} : ${d.maxTexture || '∞'}`, value: 'maxTexture' },
-      { label: `${t('settings.compressBsp')} : ${yn(d.compressBsp)}`, value: 'compressBsp' },
-      { label: `${t('settings.exclude')} : ${d.excludeWorkshop.length ? d.excludeWorkshop.join(', ') : t('cli.none')}`, value: 'excludeWorkshop' },
-      { label: `${t('settings.openReport')} : ${yn(d.openReport)}`, value: 'openReport' },
-      { label: `${t('settings.contextMenu')} : ${installed ? t('settings.installed') : t('settings.notInstalled')}`, value: 'contextMenu' },
-      { label: `${t('settings.game')} : ${cfg.gamepath || t('cli.none')}`, value: 'game' },
+    const rows = [ // [value, message key, what is shown]
+      ['lang', 'settings.lang', t.lang === 'fr' ? 'Français' : 'English'],
+      ['optimizeTextures', 'settings.optimize', yn(d.optimizeTextures)],
+      ['keepNormals', 'settings.keepNormals', yn(d.keepNormals)],
+      ['maxTexture', 'settings.maxTexture', d.maxTexture || '∞'],
+      ['compressBsp', 'settings.compressBsp', yn(d.compressBsp)],
+      ['incremental', 'settings.incremental', yn(d.incremental)],
+      ['gma', 'settings.gma', yn(d.gma)],
+      ['splitMb', 'settings.splitMb', d.splitMb || t('cli.none')],
+      ['tags', 'settings.tags', cleanTags(d.tags).join(', ')],
+      ['allSkins', 'settings.allSkins', yn(d.allSkins)],
+      ['workshop', 'settings.workshop', yn(d.workshop)],
+      ['fromWorkshop', 'settings.fromWorkshop', yn(d.fromWorkshop)],
+      ['excludeWorkshop', 'settings.exclude', d.excludeWorkshop.length ? d.excludeWorkshop.join(', ') : t('cli.none')],
+      ['threads', 'settings.threads', d.threads || t('settings.auto')],
+      ['openReport', 'settings.openReport', yn(d.openReport)],
+      ['checkUpdates', 'settings.checkUpdates', yn(d.checkUpdates)],
+      ['contextMenu', 'settings.contextMenu', installed ? t('settings.installed') : t('settings.notInstalled')],
+      ['game', 'settings.game', cfg.gamepath || t('cli.none')],
     ];
-    const pick = await ui.choose(t('settings.title'), options, { zero: '←', t });
+    const pick = await ui.choose(t('settings.title'), rows.map(([value, key, shown]) => ({ label: `${t(key)} : ${shown}`, value })), { zero: '←', t });
     if (!pick) return;
     if (pick === 'lang') { cfg.lang = t.lang === 'fr' ? 'en' : 'fr'; ctx.t = makeT(cfg.lang); ctx.fmt = ui.makeFmt(cfg.lang); }
-    else if (pick === 'maxTexture') { const n = parseInt(await ui.ask(t('settings.askMaxTexture'), t), 10); if (Number.isFinite(n) && n >= 0) d.maxTexture = n; }
+    else if (['maxTexture', 'splitMb', 'threads'].includes(pick)) { // whole numbers, 0 allowed
+      const n = parseInt(await ui.ask(t(`settings.ask${pick[0].toUpperCase()}${pick.slice(1)}`), t), 10);
+      if (Number.isFinite(n) && n >= 0) d[pick] = n;
+    }
+    else if (pick === 'tags') d.tags = cleanTags((await ui.ask(t('settings.askTags', { valid: VALID_TAGS.join(', ') }), t)).split(/[,; ]+/));
     else if (pick === 'excludeWorkshop') d.excludeWorkshop = (await ui.ask(t('settings.askExclude'), t)).split(/[,; ]+/).map((x) => x.trim()).filter(Boolean);
     else if (pick === 'contextMenu') toggleContextMenu(!installed, ctx);
     else if (pick === 'game') cfg.gamepath = path.resolve(await ui.askUntil(t('game.ask'), validGame(t), t));
@@ -486,11 +554,15 @@ async function main() {
 
   console.log(green(figlet.textSync('MapScraper')));
   console.log(`${gray(ctx.t('cli.madeBy'))} ${white('SpySpaille')} ${gray('❤️')}`);
-  checkVersion().then((v) => { latest = v; });
+  if (s.checkUpdates) checkVersion().then((v) => { latest = v; });
   console.log(`${gray('-')} ${green(ctx.t('cli.version'))} ${white(version)}\n`);
 
   let vmf = args.opts.vmf, bsp = args.opts.bsp;
   for (const f of [vmf, bsp]) if (f && validMap(ctx.t)(f)) throw new Error(ctx.t('cli.invalidMap', { file: f }));
+  const iconFile = args.opts.icon ? path.resolve(ui.unquote(args.opts.icon)) : '';
+  const iconProblem = iconFile ? checkIcon(iconFile, ctx.t) : null;
+  if (iconProblem && iconProblem.fatal) throw new Error(iconProblem.msg);
+  if (iconProblem) console.log(yellow(`ℹ️  ${iconProblem.msg}`));
   const gamepath = await resolveGamePath(args, ctx);
   cfg.gamepath = gamepath;
   cfg.defaults = { ...DEFAULTS, ...(cfg.defaults || {}) };
@@ -498,7 +570,7 @@ async function main() {
   if (args.opts.lang && LANGS.includes(String(args.opts.lang).toLowerCase())) cfg.lang = String(args.opts.lang).toLowerCase();
   saveConfig(cfg);
 
-  let extract = null, interactive = false;
+  let extract = null, interactive = false, action = null;
   const direct = !!(vmf || bsp);
   if (direct && !wantsMenu(args, tty)) { // scripted: the flags decide everything
     const all = args.flags.has('all') || !['materials', 'models', 'sounds', 'publish'].some((f) => args.flags.has(f));
@@ -508,7 +580,7 @@ async function main() {
   } else { // a human: start menu (also after a drag & drop, where no option can be typed)
     interactive = true;
     for (;;) {
-      const action = await chooseAction(ctx, direct ? path.basename(vmf || bsp) : '');
+      action = await chooseAction(ctx, direct ? path.basename(vmf || bsp) : '');
       if (!action) { showUpdate(); ui.closePrompts(); return; }
       if (action === 'settings') { await settingsMenu(ctx); s = resolveSettings(args, ctx.cfg); continue; }
       if (action === 'optimize') {
@@ -525,16 +597,33 @@ async function main() {
   rememberMap(cfg, vmf || bsp);
   saveConfig(cfg);
 
-  const job = { vmf, bsp, out: args.opts.out, title: args.opts.title, gamepath, s, extract, confirm: interactive && !args.flags.has('yes') };
+  const job = { vmf, bsp, out: args.opts.out, title: args.opts.title, description: args.opts.description, icon: iconFile, gamepath, s, extract, confirm: interactive && !args.flags.has('yes') };
+  if (interactive && s.gma && !s.dryRun) { // a .gma is about to be built: ask what the workshop page needs
+    const info = await askPublishInfo(job, ctx);
+    Object.assign(job, { title: info.title, description: info.description, icon: info.icon, s: { ...s, tags: info.tags } });
+  }
   const started = Date.now();
-  const result = await runMap(job, ctx);
+  let result = await runMap(job, ctx);
+  if (result && action === 'analyse' && await ui.askYN(ctx.t('ask.extractNow'), true, ctx.t).catch(() => false)) {
+    job.s = applyPreset(job.s, 'extract'); // the plan is recomputed: an analysis writes nothing, so there is nothing to reuse
+    result = await runMap(job, ctx);
+  }
   if (result) {
     console.log(`\n${gray(ctx.t('sum.report'))} ${white(result.reports.txt)}`);
     console.log(`${gray(ctx.t('sum.reportHtml'))} ${white(result.reports.html)}`);
-    if (s.watch && !s.dryRun) { showUpdate(); await watchMap(job, result, ctx); return; }
+    if (args.flags.has('strict') && (result.missing.length || result.warnings.length)) {
+      console.error(red(ctx.t('cli.strict', { missing: result.missing.length, warnings: result.warnings.length })));
+      process.exitCode = 2;
+    }
+    if (args.opts.json) { // after a run of minutes: a missing folder must not lose the result
+      const file = path.resolve(ui.unquote(args.opts.json));
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${JSON.stringify(result, null, 2)}\n`);
+    }
+    if (job.s.watch && !job.s.dryRun) { showUpdate(); await watchMap(job, result, ctx); return; }
     console.log(`\n${bold(green(ctx.t('cli.thanks')))}`);
     if (Date.now() - started > 30000) ui.bell();
-    if (tty && s.openReport && !args.flags.has('no-wait')) ui.openPath(result.reports.html);
+    if (tty && job.s.openReport && !args.flags.has('no-wait')) ui.openPath(result.reports.html);
   }
   end();
 }
@@ -549,4 +638,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, resolveSettings, applyPreset, wantsMenu, recentMaps, rememberMap, pickLang, runMap, watchMap, DEFAULTS, PRESETS };
+module.exports = { parseArgs, resolveSettings, applyPreset, wantsMenu, recentMaps, rememberMap, pickLang, runMap, watchMap, diffMissing, checkIcon, DEFAULTS, PRESETS };

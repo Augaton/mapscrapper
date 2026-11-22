@@ -2,17 +2,17 @@
 // Finds the Garry's Mod "garrysmod" folder through Steam (registry + libraryfolders.vdf), so the user is not asked for it.
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const kv = require('./kv');
+const { reg } = require('./winshell');
 
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 
 function regValue(key, name) {
   if (process.platform !== 'win32') return null;
   try {
-    const r = spawnSync('reg', ['query', key, '/v', name], { encoding: 'utf-8', windowsHide: true, timeout: 5000 });
-    if (r.status !== 0) return null;
-    const m = new RegExp(`^\\s*${name}\\s+REG_\\w+\\s+(.+?)\\s*$`, 'im').exec(r.stdout || '');
+    const r = reg(['query', key, '/v', name]);
+    if (!r.ok) return null;
+    const m = new RegExp(`^\\s*${name}\\s+REG_\\w+\\s+(.+?)\\s*$`, 'im').exec(r.out);
     return m ? m[1] : null;
   } catch { return null; }
 }

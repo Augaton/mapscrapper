@@ -3,6 +3,7 @@
 const readline = require('readline');
 const { spawn } = require('child_process');
 const colors = require('@colors/colors/safe');
+const { systemPath } = require('./winshell');
 
 const { gray, green, red, white, yellow, cyan, bold } = colors;
 
@@ -53,6 +54,13 @@ async function askUntil(question, validate, t) {
     if (!err) return raw;
     console.log(red(`  ${err}`));
   }
+}
+
+/** Free-text question with a proposal: Enter keeps `def`. A closed input (piped answers used up) also keeps it. */
+async function askDefault(question, def, t) {
+  let a;
+  try { a = await ask(def ? `${question} ${gray(`[${def}]`)}` : question, t); } catch { return def; }
+  return a.trim() === '' ? def : a.trim();
 }
 
 async function askYN(question, def, t) {
@@ -150,8 +158,8 @@ function createStatus(t, fmt) {
 /** Open a file or a folder with the default application. */
 function openPath(target) {
   try {
-    // explorer.exe, not "cmd /c start": a file name containing & or ^ must never reach a shell
-    const cmd = process.platform === 'win32' ? ['explorer.exe', [target]] : process.platform === 'darwin' ? ['open', [target]] : ['xdg-open', [target]];
+    // explorer.exe, not "cmd /c start": a file name containing & or ^ must never reach a shell. Absolute path: see systemPath().
+    const cmd = process.platform === 'win32' ? [systemPath('explorer.exe'), [target]] : process.platform === 'darwin' ? ['open', [target]] : ['xdg-open', [target]];
     spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     return true;
   } catch { return false; }
@@ -159,4 +167,4 @@ function openPath(target) {
 
 const bell = () => { if (process.stdout.isTTY) process.stdout.write('\x07'); };
 
-module.exports = { colors: { gray, green, red, white, yellow, cyan, bold }, makeFmt, unquote, ask, askUntil, askYN, choose, closePrompts, waitForExit, createStatus, openPath, bell, io };
+module.exports = { colors: { gray, green, red, white, yellow, cyan, bold }, makeFmt, unquote, ask, askUntil, askDefault, askYN, choose, closePrompts, waitForExit, createStatus, openPath, bell, io };

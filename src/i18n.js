@@ -28,6 +28,7 @@ const en = {
   'warn.instanceNotFound': 'Instance VMF not found: {file}',
   'warn.cannotRead': 'Cannot read {file}: {error}',
   'warn.vmtParse': 'Could not parse {file}',
+  'warn.pakDamaged': '{count} file(s) of the BSP pakfile are damaged and were ignored: {files}',
   'warn.mdlOld': 'Unsupported/old MDL format, materials not resolved: {file}',
   'warn.noBsp': 'Compiled map not found ({file}); nothing to pack.',
   'warn.packNoTool': 'Could not embed files in the BSP ({error}) and no bspzip was found: BSP copied as is.',
@@ -70,6 +71,7 @@ const en = {
   'cli.none': '(none)',
   'cli.folderNotFound': 'Folder not found: {dir}',
   'cli.invalidMap': 'Invalid map file: {file}',
+  'cli.strict': '--strict: {missing} missing file(s), {warnings} warning(s): exit code 2',
   'cli.missingGame': 'Missing or invalid --game path',
   // ----- cli: game path / map
   'game.detected': 'Garry\'s Mod found:',
@@ -112,6 +114,14 @@ const en = {
   'ask.incremental': '♻️  Keep the existing output and only copy what changed?',
   'ask.optimizeFolder': '📁 Folder to optimise',
   'ask.continue': 'Continue?',
+  'ask.extractNow': '📤 Extract this map now (your default options)?',
+  'pub.title': '🏷️  Workshop title',
+  'pub.description': '📝 Description (- = none)',
+  'pub.tags': '🔖 Tags, 2 at most ({valid})',
+  'pub.icon': '🖼️  Icon, a 512x512 .jpg (- = none)',
+  'icon.missing': 'Icon not found: {file}',
+  'icon.notJpeg': 'The icon must be a JPEG file: {file}',
+  'icon.badSize': 'The icon is {w}x{h}: the workshop expects 512x512 ({file})',
   // ----- cli: settings
   'settings.title': '⚙️  Settings (Enter to go back)',
   'settings.lang': 'Language',
@@ -128,6 +138,19 @@ const en = {
   'settings.askMaxTexture': 'Maximum texture size in pixels (0 = no limit)',
   'settings.askExclude': 'Workshop ids separated by commas (empty = none, "all" = every installed item)',
   'settings.saved': 'Saved.',
+  'settings.incremental': 'Keep the output folder and copy only changes (incremental)',
+  'settings.gma': 'Build the .gma by default',
+  'settings.splitMb': 'Split the .gma into parts of (MB)',
+  'settings.tags': 'Workshop tags',
+  'settings.allSkins': 'Copy every skin of the models',
+  'settings.workshop': 'Index the installed workshop addons',
+  'settings.fromWorkshop': 'Extract files that only exist in workshop addons',
+  'settings.threads': 'Texture optimiser threads',
+  'settings.checkUpdates': 'Look for a new version at start',
+  'settings.auto': 'auto',
+  'settings.askSplitMb': 'Maximum size of a .gma part in MB (0 = do not split)',
+  'settings.askThreads': 'Worker threads (0 = automatic)',
+  'settings.askTags': 'Tags separated by commas, 2 at most ({valid})',
   'shell.label': 'Extract with MapScraper',
   'shell.installed': '✅ Right-click entry installed for .vmf and .bsp files.',
   'shell.removed': '✅ Right-click entry removed.',
@@ -135,6 +158,7 @@ const en = {
   'shell.windowsOnly': 'The Explorer right-click menu only exists on Windows.',
   // ----- cli: plan / progress
   'plan.summary': '📦 {files} files to write, {size} ({kept} already up to date) · free space: {free}',
+  'plan.dir': 'Output folder: {dir}',
   'plan.summaryDry': '📦 The extraction would hold {files} files, {size}',
   'plan.cancelled': 'Cancelled, nothing was copied.',
   'progress.eta': 'ETA',
@@ -195,6 +219,8 @@ const en = {
   'gma.publish': 'Publish with (icon = 512x512 .jpg):',
   'watch.start': '👀 Watching {files} (Ctrl+C to stop)',
   'watch.changed': 'change detected, extracting…',
+  'watch.newMissing': '⚠️  {n} new missing file(s):',
+  'watch.fixed': '✅ {n} no longer missing:',
   'watch.line': '✅ {written} written, {stale} removed, {size} in total · {time}',
   // ----- reports
   'rep.title': 'MapScraper report: {map}',
@@ -266,11 +292,17 @@ Size
 Publishing
   --gma                   build <output>.gma (native writer, no gmad needed)     --split-mb <n>   split into parts of at most n MB
   --title <text>          addon title (default: map name)                          --tags a,b       {tags}
+  --description <text>    addon description                                        --icon <file>    512x512 .jpg, checked and used in the gmpublish command shown
+
+Scripts
+  --strict                exit code 2 when files are missing or a warning was raised (1 stays "error")
+  --json <file>           write the full result of the run as JSON
 
 Comfort
   --lang en|fr            language (default: the one of Windows)                  --no-open        do not open the visual report at the end
   --install-context-menu / --uninstall-context-menu    "Extract with MapScraper" on right-click in the Explorer
   --save-defaults         remember the current options as defaults               --yes            do not ask before big copies
+  --no-check-updates      do not look for a new version at start (also: MAPSCRAPER_OFFLINE=1)
   --no-wait               do not wait for Enter at the end
 Every on/off option has a --no-<option> form. Defaults live in {config}
 `,
@@ -301,6 +333,7 @@ const fr = {
   'warn.instanceNotFound': 'VMF d\'instance introuvable : {file}',
   'warn.cannotRead': 'Lecture impossible de {file} : {error}',
   'warn.vmtParse': 'Impossible d\'analyser {file}',
+  'warn.pakDamaged': '{count} fichier(s) du pakfile du BSP sont endommagés et ont été ignorés : {files}',
   'warn.mdlOld': 'Format MDL ancien ou non géré, matériaux non résolus : {file}',
   'warn.noBsp': 'Map compilée introuvable ({file}) ; rien à intégrer.',
   'warn.packNoTool': 'Impossible d\'intégrer des fichiers au BSP ({error}) et aucun bspzip trouvé : BSP copié tel quel.',
@@ -341,6 +374,7 @@ const fr = {
   'cli.none': '(aucun)',
   'cli.folderNotFound': 'Dossier introuvable : {dir}',
   'cli.invalidMap': 'Fichier de map invalide : {file}',
+  'cli.strict': '--strict : {missing} fichier(s) introuvable(s), {warnings} avertissement(s) : code de sortie 2',
   'cli.missingGame': 'Chemin --game absent ou invalide',
   'game.detected': 'Garry\'s Mod trouvé :',
   'game.using': 'Dossier du jeu :',
@@ -381,6 +415,14 @@ const fr = {
   'ask.incremental': '♻️  Garder la sortie existante et ne copier que ce qui a changé ?',
   'ask.optimizeFolder': '📁 Dossier à optimiser',
   'ask.continue': 'Continuer ?',
+  'ask.extractNow': '📤 Extraire cette map maintenant (tes options par défaut) ?',
+  'pub.title': '🏷️  Titre workshop',
+  'pub.description': '📝 Description (- = aucune)',
+  'pub.tags': '🔖 Tags, 2 au plus ({valid})',
+  'pub.icon': '🖼️  Icône, un .jpg de 512x512 (- = aucune)',
+  'icon.missing': 'Icône introuvable : {file}',
+  'icon.notJpeg': 'L\'icône doit être un fichier JPEG : {file}',
+  'icon.badSize': 'L\'icône fait {w}x{h} : le workshop attend du 512x512 ({file})',
   'settings.title': '⚙️  Réglages (Entrée pour revenir)',
   'settings.lang': 'Langue',
   'settings.optimize': 'Optimiser les textures par défaut',
@@ -396,12 +438,26 @@ const fr = {
   'settings.askMaxTexture': 'Taille maximale des textures en pixels (0 = sans limite)',
   'settings.askExclude': 'Ids workshop séparés par des virgules (vide = aucun, « all » = tous les addons installés)',
   'settings.saved': 'Enregistré.',
+  'settings.incremental': 'Garder le dossier de sortie et ne copier que les changements (incrémental)',
+  'settings.gma': 'Construire le .gma par défaut',
+  'settings.splitMb': 'Découper le .gma en parts de (Mo)',
+  'settings.tags': 'Tags workshop',
+  'settings.allSkins': 'Copier tous les skins des modèles',
+  'settings.workshop': 'Indexer les addons workshop installés',
+  'settings.fromWorkshop': 'Extraire les fichiers qui n\'existent que dans des addons workshop',
+  'settings.threads': 'Threads de l\'optimiseur de textures',
+  'settings.checkUpdates': 'Chercher une nouvelle version au démarrage',
+  'settings.auto': 'auto',
+  'settings.askSplitMb': 'Taille maximale d\'une part de .gma en Mo (0 = ne pas découper)',
+  'settings.askThreads': 'Threads de travail (0 = automatique)',
+  'settings.askTags': 'Tags séparés par des virgules, 2 au plus ({valid})',
   'shell.label': 'Extraire avec MapScraper',
   'shell.installed': '✅ Entrée de clic droit installée pour les fichiers .vmf et .bsp.',
   'shell.removed': '✅ Entrée de clic droit supprimée.',
   'shell.failed': 'Impossible de modifier le menu de l\'Explorateur : {error}',
   'shell.windowsOnly': 'Le menu clic droit de l\'Explorateur n\'existe que sous Windows.',
   'plan.summary': '📦 {files} fichiers à écrire, {size} ({kept} déjà à jour) · espace libre : {free}',
+  'plan.dir': 'Dossier de sortie : {dir}',
   'plan.summaryDry': '📦 L\'extraction contiendrait {files} fichiers, {size}',
   'plan.cancelled': 'Annulé, rien n\'a été copié.',
   'progress.eta': 'reste',
@@ -460,6 +516,8 @@ const fr = {
   'gma.publish': 'Publie avec (icône = .jpg de 512x512) :',
   'watch.start': '👀 Surveillance de {files} (Ctrl+C pour arrêter)',
   'watch.changed': 'changement détecté, extraction…',
+  'watch.newMissing': '⚠️  {n} nouveau(x) fichier(s) introuvable(s) :',
+  'watch.fixed': '✅ {n} fichier(s) retrouvé(s) :',
   'watch.line': '✅ {written} écrits, {stale} supprimés, {size} au total · {time}',
   'rep.title': 'Rapport MapScraper : {map}',
   'rep.generated': 'Généré le {date} par MapScraper {version}',
@@ -530,11 +588,17 @@ Taille
 Publication
   --gma                   construit <sortie>.gma (writer intégré, sans gmad)      --split-mb <n>   découpe en parts d'au plus n Mo
   --title <texte>         titre de l'addon (défaut : nom de la map)               --tags a,b       {tags}
+  --description <texte>   description de l'addon                                  --icon <fichier> .jpg 512x512, vérifié et utilisé dans la commande gmpublish affichée
+
+Scripts
+  --strict                code de sortie 2 si des fichiers sont introuvables ou si un avertissement a été levé (1 reste « erreur »)
+  --json <fichier>        écrit le résultat complet de l'exécution en JSON
 
 Confort
   --lang en|fr            langue (défaut : celle de Windows)                      --no-open        n'ouvre pas le rapport visuel à la fin
   --install-context-menu / --uninstall-context-menu    « Extraire avec MapScraper » au clic droit dans l'Explorateur
   --save-defaults         mémorise les options courantes comme valeurs par défaut --yes            ne demande pas de confirmation avant les grosses copies
+  --no-check-updates      ne cherche pas de nouvelle version au démarrage (aussi : MAPSCRAPER_OFFLINE=1)
   --no-wait               n'attend pas Entrée à la fin
 Chaque option oui/non a une forme --no-<option>. Les valeurs par défaut sont dans {config}
 `,
