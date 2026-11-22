@@ -19,6 +19,7 @@ Each release is a `## <version>` section below: the release workflow publishes t
   proposes the newest compiled maps of the game folder, so a map that only exists as a `.bsp` is one choice away.
 - The output folder is printed before anything is written. `--no-check-updates` / `checkUpdates` switch the version check off.
 - `--watch` prints only what changed between two compiles: files that just became missing and files found again.
+- A rewritten README with a logo and screenshots (`assets/`), grouped options and a security and privacy section.
 - CI: tests on Windows for every push and pull request; a `vX.Y.Z` tag builds the exe and publishes it with its SHA-256.
 
 ### Changed
@@ -34,6 +35,8 @@ Each release is a `## <version>` section below: the release workflow publishes t
 - Unknown `--flags` and value options without a value are errors; `--opt=value` is accepted. `--watch` is refused together with `--gma`.
 - Material and model names with spaces, accents or `#` are extracted; names Windows forbids are reported instead of dropped.
 - The update check runs in the background and its notice comes at the end.
+- Answers piped in advance are still served after the input has ended: after a long analysis the next question used to die
+  with `ERR_USE_AFTER_CLOSE` (for instance the "extract this map now?" offer in a scripted run).
 - `"tags": "fun"` (a string) in a hand-edited `config.json` no longer crashes the start; a JPEG icon made of endless tiny segments
   is refused instead of being read to its end; `--json` creates the folder of its file instead of failing after the run.
 

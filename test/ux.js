@@ -347,6 +347,12 @@ const solid = (id, materials) => `\tsolid\n\t{\n\t\t"id" "${id}"\n${materials.ma
     try { assert.strictEqual(readJpegSize(file), null); } finally { fs.readSync = real; }
     assert.ok(reads <= 4200, `${reads} reads`);
   });
+  await test('answers piped in advance are still served after the input has ended (a long analysis in between)', () => {
+    const script = "const ui = require(process.argv[1]); (async () => { const a = await ui.ask('q1'); await new Promise((r) => setTimeout(r, 300)); const b = await ui.ask('q2'); console.log('GOT', a, b); ui.closePrompts(); })();";
+    const r = spawnSync(process.execPath, ['-e', script, path.join(__dirname, '..', 'src', 'ui.js')], { input: 'x\ny\n', encoding: 'utf-8' });
+    assert.strictEqual(r.status, 0, r.stderr); // used to die with ERR_USE_AFTER_CLOSE on the second question
+    assert.ok(r.stdout.includes('GOT x y') && r.stdout.includes('q2'), r.stdout);
+  });
   await test('--json creates the folder of its file: a long run never loses its result', () => {
     const target = path.join(root, 'json_out', 'deep', 'result.json');
     const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'main.js'), vmfFile, '--dry-run', '--json', target, '--game', game, '--no-wait', '--no-open'], {

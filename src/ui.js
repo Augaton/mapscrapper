@@ -39,8 +39,10 @@ function ask(question, t) {
     io.rl.on('line', (l) => { if (io.waiter) { const w = io.waiter; io.waiter = null; w(l); } else io.lines.push(l); });
     io.rl.on('close', () => { io.closed = true; if (io.waiter) { const w = io.waiter; io.waiter = null; w(null); } });
   }
-  io.rl.setPrompt(`${gray('-')} ${question} ${gray('>')} `);
-  io.rl.prompt();
+  const prompt = `${gray('-')} ${question} ${gray('>')} `;
+  // Once the input has ended (answers piped in advance, then a long analysis) readline refuses to prompt, but the answers
+  // already queued must still be served: write the prompt ourselves.
+  if (io.closed) process.stdout.write(prompt); else { io.rl.setPrompt(prompt); io.rl.prompt(); }
   const eof = () => new Error(t ? t('cli.inputClosed') : 'Input closed');
   if (io.lines.length) { const l = io.lines.shift(); if (!process.stdin.isTTY) console.log(l); return Promise.resolve(l); }
   if (io.closed) return Promise.reject(eof());

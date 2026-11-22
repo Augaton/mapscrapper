@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="MapScraper logo">
+  <title>MapScraper</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3fd199"/>
+      <stop offset="1" stop-color="#0e6f55"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <g stroke-linejoin="round">
+    <polygon points="128,44 168,67 128,90 88,67" fill="#ffffff" stroke="#ffffff" stroke-width="1"/>
+    <polygon points="88,67 128,90 128,136 88,113" fill="#aee6cb" stroke="#aee6cb" stroke-width="1"/>
+    <polygon points="168,67 128,90 128,136 168,113" fill="#d4f5e4" stroke="#d4f5e4" stroke-width="1"/>
+  </g>
+  <rect x="120" y="150" width="16" height="26" fill="#ffffff"/>
+  <polygon points="100,172 156,172 128,200" fill="#ffffff"/>
+  <polyline points="78,186 78,214 178,214 178,186" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
