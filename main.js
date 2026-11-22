@@ -21,6 +21,8 @@ const { gray, green, red, white, yellow, bold } = ui.colors;
 const LATEST_URL = 'https://raw.githubusercontent.com/SpySpaille/MapScraper/main/package.json';
 const CONFIG_FILE = process.env.MAPSCRAPER_CONFIG || path.join(process.env.APPDATA || os.homedir(), 'MapScraper', 'config.json');
 const GIB = 1073741824;
+const WORKSHOP_LIMIT = 4 * GIB; // "Current limit is around 4GB": Garry's Mod wiki, Steam Workshop Rules (it was 2 GB in 2020)
+const DUPLICATE_MIN = 20 * 1048576; // a workshop item that already provides less than this is not worth a suggestion
 
 // Settings that can be preset in config.json ("defaults") and overridden on the command line.
 const DEFAULTS = {
@@ -44,9 +46,16 @@ const PRESETS = ['analyse', 'extract', 'publish', 'update', 'watch', 'custom'];
 
 // ---------- args / settings ----------
 
-/** errors: unknown tokens / flags; noValue: value options given without a value. Accepts "--opt value" and "--opt=value". */
+/**
+ * errors: unknown tokens / flags; noValue: value options given without a value; twoMaps: a second .vmf (or .bsp) after one
+ * was already given, by --vmf / --bsp or dropped on the exe. Accepts "--opt value" and "--opt=value".
+ */
 function parseArgs(argv) {
-  const a = { flags: new Set(), opts: {}, errors: [], noValue: [] };
+  const a = { flags: new Set(), opts: {}, errors: [], noValue: [], twoMaps: [] };
+  const setOpt = (name, value) => {
+    if ((name === 'vmf' || name === 'bsp') && a.opts[name] !== undefined) a.twoMaps.push(`${a.opts[name]}  /  ${value}`); // never keep one silently
+    else a.opts[name] = value;
+  };
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i];
     if (tok.startsWith('--')) {
@@ -55,11 +64,11 @@ function parseArgs(argv) {
       if (VALUE_OPTS.includes(name)) {
         const value = eq > 0 ? tok.slice(eq + 1) : argv[i + 1];
         if (value === undefined || (eq < 0 && value.startsWith('--'))) a.noValue.push(`--${name}`);
-        else { a.opts[name] = value; if (eq < 0) i++; }
+        else { setOpt(name, value); if (eq < 0) i++; }
       } else if (eq < 0 && BOOL_FLAGS.has(name)) a.flags.add(name);
       else a.errors.push(tok);
-    } else if (/\.vmf$/i.test(tok)) a.opts.vmf = tok; // drag & drop
-    else if (/\.bsp$/i.test(tok)) a.opts.bsp = tok;
+    } else if (/\.vmf$/i.test(tok)) setOpt('vmf', tok); // drag & drop
+    else if (/\.bsp$/i.test(tok)) setOpt('bsp', tok);
     else a.errors.push(tok);
   }
   return a;
@@ -105,8 +114,26 @@ function wantsMenu(args, isTTY) {
 
 // ---------- config ----------
 
-function loadConfig(file = CONFIG_FILE) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf-8')); } catch { return {}; }
+/**
+ * @returns {{cfg:object, broken:boolean}} broken: the file exists but is not a JSON object. It is hand-editable, and the
+ * program rewrites it at every start, so a typo must not silently wipe the language, the recent maps and the publication details.
+ */
+function readConfig(file = CONFIG_FILE) {
+  let text;
+  try { text = fs.readFileSync(file, 'utf-8'); } catch { return { cfg: {}, broken: false }; } // no file yet
+  if (!text.trim()) return { cfg: {}, broken: false };
+  try {
+    const cfg = JSON.parse(text);
+    if (cfg && typeof cfg === 'object' && !Array.isArray(cfg)) return { cfg, broken: false };
+  } catch { /* fall through */ }
+  return { cfg: {}, broken: true };
+}
+const loadConfig = (file) => readConfig(file).cfg;
+
+/** Keeps the unreadable config next to itself before the defaults overwrite it. @returns the copy's path, or '' when it could not be made */
+function keepBrokenConfig(file = CONFIG_FILE) {
+  const copy = `${file}.broken-${Date.now()}`;
+  try { fs.copyFileSync(file, copy); return copy; } catch { return ''; }
 }
 function saveConfig(cfg, file = CONFIG_FILE) {
   try {
@@ -116,7 +143,10 @@ function saveConfig(cfg, file = CONFIG_FILE) {
   } catch { /* ignore */ }
 }
 
-/** Most recently used maps first, then the newest VMFs of the folders they live in. */
+/**
+ * Most recently used maps first, then the newest VMFs of the folders they live in, then (what room is left, 5 at most) the newest
+ * compiled maps of the game folder: a map that only exists as a .bsp has no VMF to be listed.
+ */
 function recentMaps(cfg, limit = 9) {
   const seen = new Set(), out = [];
   const push = (file) => {
@@ -141,6 +171,19 @@ function recentMaps(cfg, limit = 9) {
   }
   siblings.sort((a, b) => b.mtime - a.mtime);
   for (const s of siblings) { if (out.length >= limit) break; push(s.file); }
+  if (cfg.gamepath && out.length < limit) {
+    const listed = new Set(out.map((m) => mapKey(m.file))); // a .bsp whose .vmf is listed is picked up through the VMF
+    const dir = path.join(cfg.gamepath, 'maps'), bsps = [];
+    try {
+      for (const n of fs.readdirSync(dir)) {
+        if (!/\.bsp$/i.test(n)) continue;
+        const p = path.join(dir, n), st = fs.statSync(p, { throwIfNoEntry: false });
+        if (st && st.isFile() && !listed.has(mapKey(p))) bsps.push({ file: p, mtime: st.mtimeMs });
+      }
+    } catch { /* no maps folder */ }
+    bsps.sort((a, b) => b.mtime - a.mtime);
+    for (const b of bsps.slice(0, 5)) { if (out.length >= limit) break; push(b.file); }
+  }
   return out.slice(0, limit);
 }
 
@@ -215,6 +258,11 @@ function printSummary(r, willOptimize, ctx) {
   if (w.excluded.length) { console.log(`\n${green(t('sum.excluded'))}`); for (const a of w.excluded) console.log(gray(`  ${addonLine(a)}`)); }
   if (w.extracted.length) { console.log(`\n${green(t('sum.extracted'))}`); for (const a of w.extracted) console.log(gray(`  ${addonLine(a)}`)); }
   if (w.required.length) { console.log(`\n${yellow(t('sum.required', { n: r.workshopMissing.length }))}`); for (const a of w.required) console.log(gray(`  ${addonLine(a)}`)); }
+  const twins = w.duplicates.filter((a) => a.id && a.bytes >= DUPLICATE_MIN).slice(0, 3); // biggest first; local .gma have no id to exclude
+  if (twins.length) {
+    console.log(`\n${yellow(t('sum.duplicates', { size: fmt.bytes(twins.reduce((n, a) => n + a.bytes, 0)) }))}`);
+    for (const a of twins) console.log(gray(`  ${addonLine(a)}   → --exclude-workshop ${a.id}`));
+  }
   if (r.missing.length) {
     console.log(`\n${yellow(t('sum.missing', { n: r.missing.length }))}`);
     for (const m of r.missing.slice(0, 8)) {
@@ -265,6 +313,9 @@ async function runOptimize(dir, s, normalMaps, ctx) {
   return res;
 }
 
+/** The archives the workshop would refuse for their size (strictly above the limit). */
+const tooBig = (archives, limit = WORKSHOP_LIMIT) => archives.filter((a) => a.size > limit);
+
 async function runGma(result, s, { title, description, icon }, gamepath, ctx) {
   const { t, fmt } = ctx;
   const status = ui.createStatus(t, fmt);
@@ -277,6 +328,7 @@ async function runGma(result, s, { title, description, icon }, gamepath, ctx) {
   } finally { status.stop(); }
   console.log(`\n${green(t('gma.done'))}`);
   for (const a of res.archives) console.log(`  ${white(a.file)} ${gray(`(${fmt.bytes(a.size)}, ${a.count} ${t('sum.filesWord')})`)}`);
+  for (const a of tooBig(res.archives)) console.log(yellow(`  ${t('gma.tooBig', { file: path.basename(a.file), size: fmt.bytes(a.size), limit: fmt.bytes(WORKSHOP_LIMIT) })}`));
   const gmpublish = path.join(path.dirname(gamepath), 'bin', 'gmpublish.exe');
   console.log(gray(`  ${t('gma.publish')}`));
   for (const a of res.archives) console.log(gray(`   "${gmpublish}" create -icon "${icon || 'icon.jpg'}" -addon "${a.file}"`));
@@ -513,7 +565,7 @@ async function resolveGamePath(args, ctx) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const cfg = loadConfig();
+  const { cfg, broken } = readConfig();
   const lang = pickLang(args, cfg);
   const ctx = { t: makeT(lang), fmt: ui.makeFmt(lang), cfg, args };
   const tty = !!process.stdin.isTTY;
@@ -529,10 +581,15 @@ async function main() {
   if (args.flags.has('help') || args.flags.has('h')) { usage(ctx.t); return; }
   if (args.errors.length) throw new Error(ctx.t('cli.unknownArg', { args: args.errors.join(' ') }));
   if (args.noValue.length) throw new Error(ctx.t('cli.missingValue', { opts: args.noValue.join(' ') }));
+  if (args.twoMaps.length) throw new Error(ctx.t('cli.twoMaps', { maps: args.twoMaps.join(' ; ') }));
   if (args.flags.has('watch') && args.flags.has('gma')) throw new Error(ctx.t('cli.watchGma'));
   if (args.flags.has('install-context-menu') || args.flags.has('uninstall-context-menu')) {
     if (!toggleContextMenu(args.flags.has('install-context-menu'), ctx)) process.exitCode = 1;
     return;
+  }
+  if (broken) { // the defaults are about to be saved over it: keep what the user wrote
+    const copy = keepBrokenConfig();
+    console.log(yellow(`ℹ️  ${ctx.t('cli.configBroken', { file: CONFIG_FILE })}${copy ? ` ${ctx.t('cli.configKept', { copy })}` : ''}`));
   }
   let s = resolveSettings(args, cfg);
 
@@ -638,4 +695,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, resolveSettings, applyPreset, wantsMenu, recentMaps, rememberMap, pickLang, runMap, watchMap, diffMissing, checkIcon, DEFAULTS, PRESETS };
+module.exports = { parseArgs, resolveSettings, applyPreset, wantsMenu, recentMaps, rememberMap, pickLang, runMap, watchMap, diffMissing, checkIcon, tooBig, readConfig, WORKSHOP_LIMIT, DEFAULTS, PRESETS };

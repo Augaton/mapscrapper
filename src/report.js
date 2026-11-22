@@ -35,6 +35,7 @@ function textReport(r, { optRes, gmaRes, t, fmt, version }) {
   section(t('rep.wsExcluded'), r.workshop.excluded.map(addon));
   section(t('rep.wsExtracted'), r.workshop.extracted.map(addon));
   section(t('rep.wsRequired'), r.workshop.required.map(addon));
+  section(t('rep.wsDuplicates'), r.workshop.duplicates.map((a) => `${addon(a)}${a.id ? `   -> --exclude-workshop ${a.id}` : ''}`));
   section(t('rep.wsFiles'), r.workshopMissing.map((f) => `${f}   <- ${r.workshopProviders[f] || ''}`));
   section(t('rep.incomplete'), r.incompleteModels);
   section(t('rep.packed'), r.packed);
@@ -138,7 +139,7 @@ function htmlReport(r, { optRes, gmaRes, t, fmt, version }) {
     : `<p class="hint">${esc(t('rep.nothing'))}</p>`, r.missing.length);
 
   const ws = [
-    [t('rep.wsExcluded'), r.workshop.excluded], [t('rep.wsExtracted'), r.workshop.extracted], [t('rep.wsRequired'), r.workshop.required],
+    [t('rep.wsExcluded'), r.workshop.excluded], [t('rep.wsExtracted'), r.workshop.extracted], [t('rep.wsRequired'), r.workshop.required], [t('rep.wsDuplicates'), r.workshop.duplicates],
   ].filter(([, l]) => l.length).map(([title, l], i) => `<h3>${esc(title)}</h3>${table(`t-ws${i}`, [t('rep.item'), t('sum.filesWord'), t('rep.size'), 'id'], addonRows(l))}`).join('');
   const wsFiles = r.workshopMissing.length ? details(t('rep.wsFiles'), r.workshopMissing.length, table('t-wsfiles', [t('rep.file'), t('rep.item')], r.workshopMissing.map((f) => `<tr><td class="path">${esc(f)}</td><td>${esc(r.workshopProviders[f] || '')}</td></tr>`), true)) : '';
   section('workshop', t('rep.workshop'), ws + wsFiles || '');

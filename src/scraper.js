@@ -179,7 +179,8 @@ class Scraper {
     this.warnings = [];
     this.notes = [];
     this.unresolved = { soundscripts: [], soundscapes: [], effects: [] };
-    this.ws = { required: new Map(), extracted: new Map(), excluded: new Map() }; // id -> { id, name, files, bytes }
+    this.ws = { required: new Map(), extracted: new Map(), excluded: new Map(), duplicate: new Map() }; // id -> { id, name, files, bytes }
+    this.extractedKeys = new Set(); // files taken out of a workshop addon (--from-workshop): never "duplicates" of it
     this.unsafe = new Set(); // referenced paths that tried to leave the game folder (ignored)
     this.refs = new Map(); // what first referenced each file: rel -> parent rel | descriptor object
     this.curRef = null;
@@ -337,7 +338,7 @@ class Scraper {
     }
     if (!found && this.fromWorkshop && this.workshop && !this.isStock(key)) {
       const hit = this.workshop.extract(key);
-      if (hit) { found = hit.path; this.tally(this.ws.extracted, hit.addon, fs.statSync(hit.path).size); }
+      if (hit) { found = hit.path; this.extractedKeys.add(key); this.tally(this.ws.extracted, hit.addon, fs.statSync(hit.path).size); }
     }
     this.resolveCache.set(key, found);
     return found;
@@ -405,6 +406,10 @@ class Scraper {
       const by = this.workshop.providers(key).find((a) => this.excludeAll || this.excludeIds.has(a.id));
       if (by) { this.excluded.add(key); this.tally(this.ws.excluded, by, st.size); return true; }
     }
+    if (this.workshop && !this.extractedKeys.has(key)) { // shipped although an installed workshop item holds the same file (name and size): worth an --exclude-workshop
+      const twin = this.workshop.copies(key).find((c) => c.size === st.size);
+      if (twin) this.tally(this.ws.duplicate, twin.addon, st.size);
+    }
     this.planList.push({ key, src, size: st.size, mtime: st.mtimeMs });
     this.copied.add(key);
     this.stats.files++;
@@ -414,10 +419,10 @@ class Scraper {
   classifyMissing(key) {
     if (this.isStock(key)) return 'stock';
     if (this.workshop) {
-      const by = this.workshop.providers(key);
-      if (by.length) {
-        this.tally(this.ws.required, by[0], 0);
-        this.workshopProviders[key] = `${by[0].id} ${by[0].name}`;
+      const [first] = this.workshop.copies(key);
+      if (first) { // the size is what the item holds: how much the required item stands for
+        this.tally(this.ws.required, first.addon, first.size);
+        this.workshopProviders[key] = `${first.addon.id} ${first.addon.name}`;
         return 'workshop';
       }
     }
@@ -1358,7 +1363,7 @@ class Scraper {
       missing: missing.sort(), missingRefs, unresolvedRefs, stock: stock.sort(), workshopMissing: workshop.sort(), workshopProviders: this.workshopProviders,
       workshop: {
         addons: this.workshopAddons,
-        required: list(this.ws.required), extracted: list(this.ws.extracted), excluded: list(this.ws.excluded),
+        required: list(this.ws.required), extracted: list(this.ws.extracted), excluded: list(this.ws.excluded), duplicates: list(this.ws.duplicate),
         errors: this.workshopErrors,
       },
       incompleteModels: this.incompleteModels.sort(), unsafePaths: [...this.unsafe].sort(),

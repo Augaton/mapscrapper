@@ -8,7 +8,9 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { readJpegSize, writeAddonJson } = require('../src/publish');
+const { Scraper } = require('../src/scraper');
 const { catalogs } = require('../src/i18n');
+const F = require('./fixtures');
 const cli = require('../main');
 
 let passed = 0;
@@ -43,7 +45,7 @@ function session(defaults = { workshop: false, checkUpdates: false }, extraCfg =
   const cwd = path.join(root, `run${++n}`), config = path.join(root, `cfg${n}`, 'config.json');
   fs.mkdirSync(cwd, { recursive: true });
   put(path.dirname(config), 'config.json', JSON.stringify({ gamepath: game, lang: 'en', defaults, ...extraCfg }));
-  const env = { ...process.env, MAPSCRAPER_CONFIG: config, MAPSCRAPER_OFFLINE: '1', FORCE_COLOR: '0' };
+  const env = { ...process.env, MAPSCRAPER_CONFIG: config, MAPSCRAPER_OFFLINE: '1', FORCE_COLOR: '0', LOCALAPPDATA: path.join(root, 'cache') }; // the workshop index is cached there
   return {
     cwd, config,
     run: (args, input = '') => spawnSync(process.execPath, [path.join(__dirname, '..', 'main.js'), ...args], { cwd, input, encoding: 'utf-8', env }),
@@ -182,6 +184,109 @@ function session(defaults = { workshop: false, checkUpdates: false }, extraCfg =
     assert.strictEqual(cli.resolveSettings(cli.parseArgs([]), {}).checkUpdates, true);
     assert.strictEqual(cli.resolveSettings(cli.parseArgs(['--no-check-updates']), {}).checkUpdates, false);
     assert.strictEqual(cli.resolveSettings(cli.parseArgs([]), { defaults: { checkUpdates: false } }).checkUpdates, false);
+  });
+
+  console.log('robustness');
+  await test('readConfig tells a missing or empty file (fine) from one that is not a JSON object (broken)', () => {
+    const f = (text) => put(root, `rc-${n++}.json`, text);
+    assert.deepStrictEqual(cli.readConfig(path.join(root, 'nowhere.json')), { cfg: {}, broken: false });
+    assert.deepStrictEqual(cli.readConfig(f('')), { cfg: {}, broken: false });
+    assert.deepStrictEqual(cli.readConfig(f('  \n')), { cfg: {}, broken: false });
+    assert.deepStrictEqual(cli.readConfig(f('{"lang":"fr"}')), { cfg: { lang: 'fr' }, broken: false });
+    for (const text of ['{ "lang": "fr", ', 'null', '[]', '"text"', '42']) assert.strictEqual(cli.readConfig(f(text)).broken, true, text);
+  });
+  await test('an unreadable config.json is kept as a copy before the defaults are saved over it', () => {
+    const s = session();
+    const broken = '{ "lang": "fr", "recent": ["x.vmf"], "publish": {"qolmap": {"title": "Mon titre"}}, ';
+    fs.writeFileSync(s.config, broken);
+    const args = [vmfOk, '--dry-run', '--no-wait', '--game', game, '--lang', 'en'];
+    const r = s.run(args);
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.ok(r.stdout.includes('not a valid JSON object') && r.stdout.includes('kept as'), r.stdout);
+    const dir = path.dirname(s.config);
+    const copies = fs.readdirSync(dir).filter((f) => f.startsWith('config.json.broken-'));
+    assert.strictEqual(copies.length, 1);
+    assert.strictEqual(fs.readFileSync(path.join(dir, copies[0]), 'utf-8'), broken, 'the user\'s text, untouched');
+    assert.ok(s.cfg().defaults, 'the config is valid again');
+    const again = s.run(args);
+    assert.ok(!again.stdout.includes('not a valid JSON'), 'a valid file is left alone');
+    assert.strictEqual(fs.readdirSync(dir).filter((f) => f.startsWith('config.json.broken-')).length, 1, 'and no new copy');
+    fs.writeFileSync(s.config, 'null'); // used to crash the start: cfg.defaults of null
+    const nul = s.run(args);
+    assert.strictEqual(nul.status, 0, nul.stdout + nul.stderr);
+  });
+  await test('two maps of the same kind are an error (a .vmf with its .bsp is fine)', () => {
+    assert.strictEqual(cli.parseArgs(['a.vmf', 'b.vmf']).twoMaps.length, 1);
+    assert.strictEqual(cli.parseArgs(['--vmf', 'a.vmf', 'b.vmf']).twoMaps.length, 1);
+    assert.strictEqual(cli.parseArgs(['a.bsp', '--bsp=b.bsp']).twoMaps.length, 1);
+    assert.deepStrictEqual(cli.parseArgs(['a.vmf', 'a.bsp']).twoMaps, []);
+    assert.deepStrictEqual(cli.parseArgs(['a.vmf']).opts, { vmf: 'a.vmf' }, 'the first one is kept');
+    const s = session();
+    const r = s.run([vmfOk, vmfBad, '--no-wait', '--lang', 'en']);
+    assert.ok(r.status === 1 && r.stderr.includes('one map at a time') && r.stderr.includes('qolbad.vmf'), r.stdout + r.stderr);
+    assert.ok(!fs.existsSync(path.join(s.cwd, 'qolmap')) && !fs.existsSync(path.join(s.cwd, 'qolbad')), 'nothing was run');
+  });
+  await test('the map list also offers the newest compiled maps of the game folder (5 at most, not those whose VMF is listed)', () => {
+    const gp = path.join(root, 'gp');
+    const bsp = (name, ageDays) => { const p = put(gp, `maps/${name}`, 'BSP'); const d = new Date(Date.now() - ageDays * 86400000); fs.utimesSync(p, d, d); return p; };
+    for (let i = 0; i < 7; i++) bsp(`map${i}.bsp`, i + 1);
+    bsp('same.bsp', 0.5); put(gp, 'maps/notes.txt', 'x'); put(gp, 'maps/graphs/g.bsp', 'x');
+    const dir = path.join(root, 'bspsrc');
+    const vmf = put(dir, 'same.vmf', '');
+    const list = (cfg) => cli.recentMaps(cfg).map((m) => path.basename(m.file));
+    assert.deepStrictEqual(list({ gamepath: gp, recent: [vmf] }), ['same.vmf', 'map0.bsp', 'map1.bsp', 'map2.bsp', 'map3.bsp', 'map4.bsp']);
+    assert.deepStrictEqual(list({ gamepath: gp }), ['same.bsp', 'map0.bsp', 'map1.bsp', 'map2.bsp', 'map3.bsp'], 'no history: the newest compiled maps');
+    assert.deepStrictEqual(list({ recent: [vmf] }), ['same.vmf'], 'without a game folder nothing changes');
+    assert.deepStrictEqual(list({ gamepath: path.join(root, 'nogame') }), []);
+  });
+  await test('an archive above the workshop limit is flagged, one at the limit is not', () => {
+    const sizes = [{ size: cli.WORKSHOP_LIMIT }, { size: cli.WORKSHOP_LIMIT + 1 }, { size: 10 }];
+    assert.deepStrictEqual(cli.tooBig(sizes), [sizes[1]]);
+    assert.deepStrictEqual(cli.tooBig(sizes, 5), [sizes[0], sizes[1], sizes[2]]);
+    assert.strictEqual(cli.WORKSHOP_LIMIT, 4 * 1073741824);
+    const t = (lang) => catalogs[lang]['gma.tooBig'];
+    for (const lang of ['en', 'fr']) assert.ok(t(lang).includes('--optimize-textures') && !t(lang).includes('--split-mb'), `${lang}: advises making it smaller, not splitting`);
+  });
+
+  console.log('workshop');
+  const game2 = path.join(root, 'ws2', 'steamapps', 'common', 'GarrysMod', 'garrysmod');
+  const content2 = path.join(root, 'ws2', 'steamapps', 'workshop', 'content', '4000');
+  const bigData = Buffer.alloc(21 * 1048576, 7), vmtOf = (tex) => `"LightmappedGeneric"\n{\n\t"$basetexture" "${tex}"\n}\n`;
+  put(game2, 'materials/dup/big.vmt', vmtOf('dup/big')); put(game2, 'materials/dup/big.vtf', bigData);  // also held by item 444, byte for byte
+  put(game2, 'materials/own/small.vmt', vmtOf('own/small')); put(game2, 'materials/own/small.vtf', 'abc'); // item 555 has another version of it
+  put(content2, '444/pack.gma', F.makeGMA({ name: 'Big Pack', files: { 'materials/dup/big.vmt': vmtOf('dup/big'), 'materials/dup/big.vtf': bigData } }));
+  put(content2, '555/other.gma', F.makeGMA({ name: 'Other Pack', files: { 'materials/own/small.vtf': 'abcdef' } }));
+  put(content2, '666/only.gma', F.makeGMA({ name: 'Only Here', files: { 'materials/ws/only.vmt': vmtOf('ws/only'), 'materials/ws/only.vtf': 'X'.repeat(1000) } }));
+  const vmfWs = put(root, 'src/wsmap.vmf', mapText(['DUP/BIG', 'OWN/SMALL', 'WS/ONLY']));
+  const scrape = (extra) => new Scraper({ gamepath: game2, vmf: vmfWs, outputDir: path.join(root, `ws_out${n++}`), cacheDir: path.join(root, 'cache2'), dryRun: true, ...extra }).run();
+  await test('files shipped although an installed workshop item holds the same file are reported per item, with their size', async () => {
+    const r = await scrape();
+    assert.deepStrictEqual(r.workshop.duplicates.map((a) => [a.id, a.name, a.files]), [['444', 'Big Pack', 2]], 'the item with another version of the file is not a twin');
+    assert.ok(r.workshop.duplicates[0].bytes >= bigData.length);
+    const only = r.workshop.required.find((a) => a.id === '666');
+    assert.ok(only && only.bytes > 0, 'a required item stands for a size, not 0');
+    assert.deepStrictEqual(r.missing, [], 'nothing is lost: the workshop files are listed as required, not missing');
+  });
+  await test('excluding the item empties its duplicates; files taken from a workshop item (--from-workshop) are never duplicates of it', async () => {
+    const ex = await scrape({ excludeWorkshop: ['444'] });
+    assert.deepStrictEqual(ex.workshop.duplicates, []);
+    assert.deepStrictEqual(ex.workshop.excluded.map((a) => a.id), ['444']);
+    const fw = await scrape({ fromWorkshop: true });
+    assert.deepStrictEqual(fw.workshop.extracted.map((a) => a.id), ['666']);
+    assert.deepStrictEqual(fw.workshop.duplicates.map((a) => a.id), ['444'], 'only the loose files');
+  });
+  await test('the summary suggests --exclude-workshop <id>, and the text and HTML reports list the candidates', () => {
+    const s = session({ workshop: true, checkUpdates: false }, { gamepath: game2 });
+    const r = s.run([vmfWs, '--dry-run', '--no-wait', '--no-open', '--lang', 'en']);
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.ok(r.stdout.includes('already provide files this addon ships') && r.stdout.includes('--exclude-workshop 444'), r.stdout);
+    assert.ok(!r.stdout.includes('--exclude-workshop 555') && !r.stdout.includes('--exclude-workshop 666'), 'only the twins');
+    for (const f of ['wsmap_report.txt', 'wsmap_report.html']) {
+      const text = fs.readFileSync(path.join(s.cwd, f), 'utf-8');
+      assert.ok(text.includes('candidates for --exclude-workshop') && text.includes('Big Pack') && text.includes('444'), f);
+    }
+    const small = session({ workshop: true, checkUpdates: false }, { gamepath: game });
+    assert.ok(!small.run([vmfOk, '--dry-run', '--no-wait', '--no-open', '--lang', 'en']).stdout.includes('already provide files'), 'nothing to suggest, nothing printed');
   });
 
   console.log('watch');

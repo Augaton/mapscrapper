@@ -35,7 +35,8 @@ English or French depending on Windows (`--lang en|fr`), and the game folder is 
 - ██████████░░░░░░░░░░░░  45%  1.03 GB / 2.29 GB  310 MB/s  ETA 00:04  materials/…
 ```
 
-The map list holds the maps you used last, then the most recent VMFs of the same folders. Before anything is
+The map list holds the maps you used last, then the most recent VMFs of the same folders, then (if there is room) the newest
+compiled `.bsp` of the game's `maps` folder: a map you only have as a `.bsp` is one choice away. Before anything is
 written the tool tells you how much it is going to copy and **where** (and asks above 1 GB), and checks the free disk
 space. After an analysis it offers to extract the map right away.
 
@@ -114,6 +115,9 @@ menu edits every one of them):
 }
 ```
 
+The file can be edited by hand. If it is ever not valid JSON, the tool does not overwrite it silently: it keeps your text as
+`config.json.broken-<time>` next to it, says so, and starts from the defaults.
+
 ### Environment, network, exit codes
 
 | | |
@@ -167,6 +171,16 @@ Installed workshop addons (`steamapps/workshop/content/4000`, raw `.gma` and LZM
 `--from-workshop`, and `--exclude-workshop`: if your map already depends on a content pack you published,
 `--exclude-workshop <its id>` leaves out everything that pack provides and only ships the delta.
 
+You do not have to guess which items to exclude: the summary and the reports list the installed items that **already hold
+files your addon is about to ship** (same path, same size), with the size at stake, and print the exact option:
+
+```console
+💡 Installed workshop items already provide files this addon ships (1.20 GB in total). Leave them out with --exclude-workshop <id> (they become required items):
+  4210 files    1.20 GB  https://steamcommunity.com/sharedfiles/filedetails/?id=3556917354  My Content Pack   → --exclude-workshop 3556917354
+```
+
+It is only a suggestion: an excluded item becomes a *required item* of your addon, which players then need to subscribe to.
+
 ## Publishing
 
 - Files a workshop `.gma` is not allowed to contain (soundscapes, particle manifests, `_level_sounds.txt`, `.raw`…)
@@ -175,6 +189,9 @@ Installed workshop addons (`steamapps/workshop/content/4000`, raw `.gma` and LZM
 - `addon.json` is written in the output folder; `--gma` builds the archive(s) natively (whitelist enforced, map
   first, optional splitting). Publish with `gmpublish.exe create -icon icon.jpg -addon <file.gma>`: the command is
   printed at the end, with the path of your `--icon` when you gave one.
+- The workshop takes addons of **around 4 GB** (Garry's Mod wiki, *Steam Workshop Rules*) and asks authors not to upload
+  multi-part addons. An archive above that is flagged with what makes it smaller: `--optimize-textures`,
+  `--compress-bsp`, `--exclude-workshop`. `--split-mb` stays available for other uses.
 - All output paths are lowercased so the addon works on Linux servers.
 
 ## Shrinking the addon
@@ -197,7 +214,7 @@ large RP map shrinks to ~1.6 GB.
 ## Development
 
 ```console
-npm test         # three self-contained suites (synthetic game folder, BSP / GMA / LZMA / VTF / MDL fixtures, CLI end to end)
+npm test         # four self-contained suites (synthetic game folder, BSP / GMA / LZMA / VTF / MDL fixtures, CLI end to end)
 npm run build    # pinned @yao-pkg/pkg → dist/MapScraper.exe + MapScraper.exe.sha256 (verify: certutil -hashfile MapScraper.exe SHA256)
 npm run vector   # regenerate the LZMA test vector (needs the xz command)
 ```
@@ -205,7 +222,18 @@ npm run vector   # regenerate the LZMA test vector (needs the xz command)
 Source layout: `main.js` (CLI) · `src/scraper.js` (engine: `plan()` then `execute()`) · `src/ui.js` (menus, progress bar) ·
 `src/report.js` (text + HTML reports) · `src/i18n.js` (English / French) · `src/steam.js` · `src/watch.js` · `src/winshell.js` · `src/bsp.js` (BSP reader + pakfile writer) ·
 `src/gma.js` (GMA reader + workshop index) · `src/lzma.js` (LZMA decoder) · `src/publish.js` (whitelist, `.gma`
-writer) · `src/vtf.js` + `src/optimize.js` (texture codec / optimiser) · `src/mdl.js` · `src/vpk.js` · `src/kv.js`.
+writer) · `src/vtf.js` + `src/optimize.js` (texture codec / optimiser) · `src/mdl.js` · `src/vpk.js` · `src/kv.js` · `src/prefetch.js` (parallel first-open of big file lists).
+
+### Releasing
+
+GitHub Actions (`.github/workflows/ci.yml`) runs `npm test` on Windows for every push and pull request. To publish a version:
+
+1. `npm version X.Y.Z --no-git-tag-version` (updates `package.json` and the lockfile) and add a `## X.Y.Z - date` section to `CHANGELOG.md`;
+2. commit, then `git tag vX.Y.Z` and `git push --tags`.
+
+The workflow then checks that the tag, `package.json` and the changelog agree, builds `dist/MapScraper.exe`, and creates the
+GitHub release with the exe, its `.sha256`, and that changelog section as the notes. The update notice of installed copies
+compares their version with the `package.json` on `main`, so bump it for every release.
 
 ## Author
 

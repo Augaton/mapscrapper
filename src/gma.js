@@ -165,6 +165,11 @@ class WorkshopIndex {
     return (this.byPath.get(rel) || []).map(([ai]) => this.addons[ai]);
   }
 
+  /** Like providers(), with the size each addon stores the file at: [{ addon, size }]. */
+  copies(rel) {
+    return (this.byPath.get(rel) || []).map(([ai, fi]) => ({ addon: this.addons[ai], size: this.addons[ai].files[fi].size }));
+  }
+
   /** Extract a file from the first addon that provides it; returns { path, addon } (cached copy) or null. */
   extract(rel) {
     const hits = this.byPath.get(rel);

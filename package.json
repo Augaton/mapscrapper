@@ -1,6 +1,6 @@
 {
   "name": "mapscraper",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "Extracts every asset a Source Engine / Garry's Mod map depends on (materials, textures, models, sounds, soundscapes, particles, misc files) from its VMF.",
   "main": "main.js",
   "author": "SpySpaille",
