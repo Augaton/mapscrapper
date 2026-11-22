@@ -5,16 +5,16 @@
 <p align="center"><b>Extract every asset a Source Engine / Garry's Mod map depends on, ready for the Steam Workshop.</b></p>
 
 <p align="center">
-  <a href="https://github.com/SpySpaille/MapScraper/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/SpySpaille/MapScraper?color=2f9e63"></a>
-  <a href="https://github.com/SpySpaille/MapScraper/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/SpySpaille/MapScraper/total?color=2f9e63"></a>
-  <a href="https://github.com/SpySpaille/MapScraper/actions/workflows/ci.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/SpySpaille/MapScraper/ci.yml?branch=main&label=tests"></a>
+  <a href="https://github.com/Augaton/mapscrapper/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Augaton/mapscrapper?color=2f9e63"></a>
+  <a href="https://github.com/Augaton/mapscrapper/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/Augaton/mapscrapper/total?color=2f9e63"></a>
+  <a href="https://github.com/Augaton/mapscrapper/actions/workflows/ci.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/Augaton/mapscrapper/ci.yml?branch=main&label=tests"></a>
   <img alt="Platforms: Windows and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078d4">
-  <img alt="Node 18 or later" src="https://img.shields.io/badge/node-%E2%89%A518-339933">
+  <img alt="Node 22 or later" src="https://img.shields.io/badge/node-%E2%89%A522-339933">
   <img alt="License: ISC" src="https://img.shields.io/badge/license-ISC-blue">
 </p>
 
 <p align="center">
-  <a href="https://github.com/SpySpaille/MapScraper/releases/latest"><b>Download</b></a> ·
+  <a href="https://github.com/Augaton/mapscrapper/releases/latest"><b>Download</b></a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#command-line">Command line</a> ·
   <a href="#security-and-privacy">Security</a> ·
@@ -43,7 +43,7 @@ published. Whatever it cannot find is reported together with **who uses it**, do
 
 ## Quick start
 
-1. **Download** the program from the [latest release](https://github.com/SpySpaille/MapScraper/releases/latest): `MapScraper.exe`
+1. **Download** the program from the [latest release](https://github.com/Augaton/mapscrapper/releases/latest): `MapScraper.exe`
    for Windows, `mapscraper-linux-x64.tar.gz` for Linux. Each file comes with a `.sha256`: check it with
    `certutil -hashfile MapScraper.exe SHA256` (Windows) or `sha256sum -c mapscraper-linux-x64.tar.gz.sha256` (Linux).
 2. **Windows:** put the exe in a dedicated folder and double-click it, or **drag a `.vmf` / `.bsp` onto it**. Settings can also add
@@ -52,7 +52,7 @@ published. Whatever it cannot find is reported together with **who uses it**, do
 3. **Pick what you want** from the menu. The interface is in English or French depending on the system (`--lang en|fr`),
    and the Garry's Mod folder is found through Steam, then remembered (`--game <dir>` to give it).
 
-From source (Node 18 or later, Windows or Linux): `npm install`, then `npm start`. On Linux the settings live in
+From source (Node 22 or later, Windows or Linux): `npm install`, then `npm start`. On Linux the settings live in
 `~/.config/MapScraper/config.json` and the workshop cache in `~/.cache/MapScraper` (`XDG_CONFIG_HOME` / `XDG_CACHE_HOME` are honoured).
 The Explorer right-click menu, and `--compress-bsp` (it needs the Windows tool `bspzipplusplus.exe`), are Windows-only.
 
@@ -273,7 +273,8 @@ MapScraper reads files it did not write (maps, models, particle files, workshop 
 - **Sizes are never trusted.** Decompressing BSP data is capped (512 MiB), and a damaged entry of a BSP pakfile is reported and
   skipped instead of aborting the analysis or exhausting memory.
 - **Text from a map is sanitised.** Control characters (terminal escape sequences) are removed before they reach the console or
-  the reports, and everything written in the HTML report is escaped.
+  the reports, and everything written in the HTML report is escaped. The report also carries a Content-Security-Policy: only its
+  own script can run, and it loads nothing from the network.
 - **Windows programs are called by absolute path** (`reg.exe`, `explorer.exe`), so a file planted next to a map cannot be run
   in their place.
 - **Your files are protected.** The output folder is only cleared if it contains nothing but what MapScraper creates, and files

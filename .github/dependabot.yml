@@ -1,0 +1,18 @@
+# Weekly pull requests for the pinned GitHub Actions (commit SHA + "# vX" comment) and for the npm dependencies.
+# Nothing is merged by itself: every update goes through the tests (CI) first. A merged npm update changes package.json /
+# package-lock.json, so it also releases a patch version (see "Releasing" in the README).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(ci)"
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"

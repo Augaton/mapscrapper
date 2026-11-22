@@ -32,6 +32,8 @@ Each release is a `## <version>` section below: the release workflow publishes t
 
 ### Changed
 - A second `.vmf` (or `.bsp`) given on the command line, or dropped on the exe, is an error instead of silently replacing the first.
+- The update check and its link follow the releases of this repository (they pointed to the upstream project).
+- Running from source needs Node 22 or later (`engines`): it is the version the tests, the CI and the binaries use.
 
 ### Fixed
 - An unreadable `config.json` is no longer overwritten without a word: it is kept as `config.json.broken-<time>` and the
@@ -60,6 +62,9 @@ Each release is a `## <version>` section below: the release workflow publishes t
 - The asset-path patterns are bounded (80 KB of path characters took 6.6 s). Decompression is capped at 512 MiB. A damaged BSP
   pakfile entry is skipped and reported instead of aborting the analysis.
 - The release workflow no longer leaves its token in `.git/config` while `npm ci` runs, and builds the shipped exe without a cache.
+  Its actions are pinned to a commit, and Dependabot proposes the updates every week.
+- The HTML report carries a Content-Security-Policy: only its own script (matched by its SHA-256) can run, and it can neither load
+  nor submit anything. A test recomputes the hash and checks that nothing in the page needs more than the policy allows.
 
 ## 2.6.0
 

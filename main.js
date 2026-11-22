@@ -18,7 +18,8 @@ const ui = require('./src/ui');
 const { version } = require('./package.json');
 
 const { gray, green, red, white, yellow, bold } = ui.colors;
-const LATEST_URL = 'https://raw.githubusercontent.com/SpySpaille/MapScraper/main/package.json';
+const REPO = 'Augaton/mapscrapper'; // where the releases come from: the update check and its link
+const LATEST_URL = `https://raw.githubusercontent.com/${REPO}/main/package.json`;
 const CONFIG_FILE = process.env.MAPSCRAPER_CONFIG || configFile();
 const GIB = 1073741824;
 const WORKSHOP_LIMIT = 4 * GIB; // "Current limit is around 4GB": Garry's Mod wiki, Steam Workshop Rules (it was 2 GB in 2020)
@@ -574,7 +575,7 @@ async function main() {
   const showUpdate = () => {
     if (updateShown || !latest || !isNewer(latest, version)) return;
     updateShown = true;
-    console.log(`\n${gray('-')} ${red(ctx.t('cli.outdated'))} ${gray(`${ctx.t('cli.latest', { version: latest })} · https://github.com/SpySpaille/MapScraper`)}`);
+    console.log(`\n${gray('-')} ${red(ctx.t('cli.outdated'))} ${gray(`${ctx.t('cli.latest', { version: latest })} · https://github.com/${REPO}/releases/latest`)}`);
   };
   const end = () => { showUpdate(); if (!args.flags.has('no-wait') && tty) ui.waitForExit(ctx.t); else ui.closePrompts(); };
 

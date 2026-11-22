@@ -1,6 +1,7 @@
 'use strict';
 // Text and HTML reports written next to the output folder.
 const fs = require('fs');
+const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const { describeRef, describeChain } = require('./scraper');
 
@@ -83,6 +84,10 @@ document.querySelectorAll('input[data-filter]').forEach(function(inp){inp.addEve
 document.querySelectorAll('th[data-sort]').forEach(function(th){th.addEventListener('click',function(){var tb=th.closest('table').tBodies[0],i=th.cellIndex,dir=th.dataset.dir==='asc'?-1:1;th.dataset.dir=dir===1?'asc':'desc';Array.prototype.slice.call(tb.rows).sort(function(a,b){var x=a.cells[i].dataset.v||a.cells[i].textContent,y=b.cells[i].dataset.v||b.cells[i].textContent,nx=parseFloat(x),ny=parseFloat(y);return(!isNaN(nx)&&!isNaN(ny)&&a.cells[i].dataset.v!==undefined?nx-ny:x.localeCompare(y))*dir;}).forEach(function(r){tb.appendChild(r);});});});
 document.querySelectorAll('button[data-copy]').forEach(function(b){b.addEventListener('click',function(){if(navigator.clipboard)navigator.clipboard.writeText(b.dataset.copy);b.textContent='✓ '+b.dataset.copy;});});
 `;
+
+// The report is opened from disk and shows names taken from third-party maps: even if an escape were missed, only this one script
+// (matched by its hash) may run, and nothing may be loaded, submitted or re-based. Inline CSS stays (the bars set a width).
+const CSP = `default-src 'none'; script-src 'sha256-${crypto.createHash('sha256').update(JS, 'utf8').digest('base64')}'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`;
 
 function htmlChain(chain, t) {
   if (!chain || !chain.length) return '';
@@ -174,7 +179,7 @@ function htmlReport(r, { optRes, gmaRes, t, fmt, version }) {
   try { folderUrl = pathToFileURL(r.outputDir).href; } catch { /* odd path */ }
   const bspLine = r.bsp ? `<p class="sub">BSP: ${esc(r.bsp.file)} (${esc(t('sum.bspDetail', { version: r.bsp.version, compressed: r.bsp.compressed ? t('sum.bspCompressedTag') : '', pak: r.bsp.pakFiles }))})</p>` : '';
   return `<!doctype html>
-<html lang="${esc(t.lang)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="${esc(t.lang)}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(t('rep.title', { map: r.mapname }))}</title><style>${CSS}</style></head>
 <body><main>
 <h1>${esc(r.mapname)}${r.dryRun ? `<span class="tag">${esc(t('rep.dry'))}</span>` : ''}</h1>

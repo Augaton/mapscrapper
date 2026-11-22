@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { catalogs, makeT } = require('../src/i18n');
 const { Scraper, describeChain } = require('../src/scraper');
@@ -390,6 +391,25 @@ const solid = (id, materials) => `\tsolid\n\t{\n\t\t"id" "${id}"\n${materials.ma
       assert.ok(!/\{[a-z]+\}/i.test(html.replace(/<style>[\s\S]*?<\/style>|<script>[\s\S]*?<\/script>/g, '')), 'no unfilled placeholder');
       new vm.Script(/<script>([\s\S]*?)<\/script>/.exec(html)[1]); // throws on a syntax error
     }
+  });
+
+  await test('the HTML report carries a CSP that lets exactly its own script run', () => {
+    const t = makeT('en'), fmt = ui.makeFmt('en');
+    const html = htmlReport({ ...firstRun, warnings: ['<img src=x onerror=alert(1)>'] }, { t, fmt, version: '0.0.0', optRes: null, gmaRes: null });
+    const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/.exec(html);
+    assert.ok(csp && csp.index < html.indexOf('<script>') && csp.index < html.indexOf('<style>'), 'a CSP before any script or style');
+    assert.ok(/(^|; )default-src 'none'(;|$)/.test(csp[1]) && csp[1].includes("base-uri 'none'") && csp[1].includes("form-action 'none'"));
+    assert.ok(!/unsafe-eval|script-src[^;]*unsafe-inline|\*|https?:/.test(csp[1]), 'no way around the script hash');
+    const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)];
+    assert.strictEqual(scripts.length, 1, 'one script only');
+    const hash = `'sha256-${crypto.createHash('sha256').update(scripts[0][1], 'utf8').digest('base64')}'`; // what a browser computes
+    assert.ok(csp[1].includes(`script-src ${hash};`), 'the hash is the one of the script text');
+    assert.ok(!scripts[0][1].includes('\r'), 'a CR would be normalised by the HTML parser and break the hash');
+    // Nothing the policy would block: no inline handler, javascript: URL, external resource, form or frame.
+    const body = html.replace(/<script\b[\s\S]*?<\/script>|<style>[\s\S]*?<\/style>/g, '');
+    assert.ok(!/<[^>]+\son[a-z]+\s*=/i.test(body) && !/javascript:/i.test(body), 'no inline handler');
+    assert.ok(!/<(link|img|iframe|frame|object|embed|form|base)\b/i.test(body), 'nothing to load');
+    assert.ok(!/url\(|@import/i.test(html.match(/<style>([\s\S]*?)<\/style>/)[1]), 'the CSS loads nothing');
   });
 
   console.log('watch');
