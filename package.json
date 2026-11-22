@@ -16,7 +16,7 @@
     "build:linux": "pkg . --targets node22-linux-x64 --output dist/mapscraper"
   },
   "dependencies": {
-    "@colors/colors": "^1.6.0",
+    "@colors/colors": "^1.6.1",
     "figlet": "^1.8.0"
   },
   "bin": "./main.js",
